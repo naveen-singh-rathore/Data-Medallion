@@ -9,7 +9,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
-PROFILER_VERSION = "1.2"
+PROFILER_VERSION = "1.3"
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,60 @@
+# Hand-written example: rules for 3 flagged columns of raw_tickets (sla_hours, cost, created_at).
+# Validate: python -m pipeline.cli validate-rules ../rules/examples/three_columns.yaml
+schema_version: "1"
+source_run_id: 85113639-1dc6-469c-990c-a29da5334456
+generated_by: human
+columns:
+  - name: sla_hours
+    source: sla_hours
+    type: integer
+    steps: [trim]
+    null_tokens: [n/a, "null"]
+    sentinels: ["999", "-1"]
+    range: {min: 0, max: 720}
+    confidence: 0.85
+    why: SLA compliance is measured against this target; 999 and -1 are placeholders, not real targets.
+    addresses: [SENTINEL:sla_hours, NULLTOK:sla_hours, EMPTY:sla_hours]
+  - name: cost
+    source: cost
+    type: numeric
+    steps: [trim, strip_currency]
+    null_tokens: [n/a, tbd, "null", error]
+    sentinels: ["-1", "-999"]
+    range: {min: 0}
+    invalid_action: "null"
+    confidence: 0.8
+    why: Repair spend per building and category needs one numeric amount; $ prefixes and placeholders block sums.
+    addresses: [MIXED:cost, NUMTXT:cost, NULLTOK:cost, SENTINEL:cost, EMPTY:cost]
+  - name: created_at
+    source: created_at
+    type: timestamp
+    steps: [trim]
+    null_tokens: [tbd, asap]
+    sentinels: ["0000-00-00"]
+    parse_formats: [YYYY-MM-DDTHH:MM:SS, YYYY-MM-DD HH:MM:SS, MM/DD/YYYY HH:MM AM/PM, YYYY-MM-DD,
+                    DD-Mon-YYYY HH:MM, MM/DD/YYYY, MM-DD-YYYY HH:MM:SS, epoch seconds]
+    day_month_order: mdy
+    required: true
+    invalid_action: reject
+    confidence: 0.75
+    why: Resolution time and ticket volume over time both start from the creation timestamp.
+    addresses: [DATEFMT:created_at, AMBIG:created_at, NULLTOK:created_at, SENTINEL:created_at, UNPARSED:created_at]
+addressed_issues:
+  - {issue_id: SENTINEL:sla_hours, resolution: rule}
+  - {issue_id: NULLTOK:sla_hours, resolution: rule}
+  - {issue_id: EMPTY:sla_hours, resolution: rule}
+  - {issue_id: MIXED:cost, resolution: rule}
+  - {issue_id: NUMTXT:cost, resolution: rule}
+  - {issue_id: NULLTOK:cost, resolution: rule}
+  - {issue_id: SENTINEL:cost, resolution: rule}
+  - {issue_id: EMPTY:cost, resolution: ignored, reason: "Missing cost is real: many tickets have no billed repair."}
+  - {issue_id: DATEFMT:created_at, resolution: rule}
+  - {issue_id: AMBIG:created_at, resolution: rule}
+  - {issue_id: NULLTOK:created_at, resolution: rule}
+  - {issue_id: SENTINEL:created_at, resolution: rule}
+  - {issue_id: UNPARSED:created_at, resolution: rule}
+needs_human:
+  - issue_ids: [AMBIG:created_at]
+    question: "Ambiguous dates like 05/07/2024: confirm they are month-first (US) as the data suggests?"
+    options: [month-first (mdy), day-first (dmy)]
+    agent_recommendation: month-first - 1,863 unambiguous values prove month-first, none prove day-first.

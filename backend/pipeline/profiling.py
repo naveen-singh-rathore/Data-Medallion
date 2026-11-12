@@ -25,7 +25,12 @@ from pipeline.profile_columns import coarse_mask, column_seed, profile_column
 from pipeline.profile_config import PROFILE_CONFIG as CFG
 from pipeline.profile_config import PROFILER_VERSION, config_dict, config_hash
 from pipeline.profile_dates import ParsedDate, is_unambiguous, parse_dates
-from pipeline.profile_issues import column_issues, dataset_issues, sort_issues
+from pipeline.profile_issues import (
+    assign_ids,
+    column_issues,
+    dataset_issues,
+    sort_issues,
+)
 from pipeline.profile_values import is_missing, normalization_key, truncate
 
 Profile = dict[str, Any]
@@ -296,7 +301,8 @@ def profile_run(run_id: uuid.UUID) -> None:
             for i, c in enumerate(data.columns, start=1)
         ]
         summary = dataset_summary(data, profiles)
-        issues = sort_issues([*dataset_issues(summary), *(i for p in profiles for i in column_issues(p))], data.columns)
+        issues = assign_ids(sort_issues([*dataset_issues(summary), *(i for p in profiles for i in column_issues(p))],
+                                        data.columns))  # fmt: skip
         _store(conn, run_id, profiles, summary, issues)
     severity = Counter(i["severity"] for i in issues)
     log.info(

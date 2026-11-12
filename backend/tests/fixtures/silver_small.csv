@@ -1,0 +1,13 @@
+id,state,opened,closed,amount,owner,flag
+S-01,Open,2024-03-01,2024-03-05,$40,Alice Moreno,yes
+S-02,open,2024-03-02,2024-03-01,12.5,Bilal Khan,no
+S-03,OPEN,03/04/2024,2024-03-10,999,Chen Wei,yes
+S-04,In-Progress,2024-03-04,2024-03-08,N/A,Alice Moreno,no
+S-05,in progress,2024-03-05,2024-03-09,abc,Bilal Khan,yes
+S-06,Closed,2024-03-06,2024-03-07,30,Chen Wei,no
+S-07,Closed,2024-03-07,2024-03-02,999,Alice Moreno,yes
+S-08,Open,2024-03-08,2024-03-12,15,Bilal Khan,no
+S-09,Closed,2024-03-09,2024-03-11,$1200,Chen Wei,yes
+S-10,Open,2024-03-10,2024-03-12,22,Alice Moreno,no
+S-11,Closed,2024-03-11,2024-03-13,999,Bilal Khan,yes
+S-12,Open,2024-03-12,,18,Chen Wei,no

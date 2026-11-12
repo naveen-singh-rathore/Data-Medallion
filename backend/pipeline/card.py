@@ -32,7 +32,7 @@ from pipeline.config import settings
 from pipeline.db import transaction
 from pipeline.logging_setup import get_logger
 from pipeline.privacy import column_policies, redact_issue
-from pipeline.profile_issues import SEVERITY_RANK
+from pipeline.profile_issues import SEVERITY_RANK, SHORT_CODES, issue_id
 
 RENDERER_VERSION = "1.1"
 EVIDENCE_CHARS = 80
@@ -41,13 +41,6 @@ EXACT_ATTEMPTS = 3
 # Short forms on the card (the legend line explains them); full names stay in the profile JSON.
 EVIDENCE_KEYS = {"examples": "ex", "count": "n", "share": "sh", "compared": "of", "punctuation_only": "punct",
                  "unambiguous_share": "unambig_sh", "unambiguous_compared": "unambig_of"}
-ISSUE_CODES = {"DATE_ORDER": "ORDER", "MIXED_DATE_FORMATS": "DATEFMT", "AMBIGUOUS_DATES": "AMBIG",
-               "NULL_LIKE_TOKENS": "NULLTOK", "SENTINEL_VALUES": "SENTINEL", "UNPARSED_DATES": "UNPARSED",
-               "HIGH_EMPTY_RATE": "EMPTY", "NORMALIZATION_VARIANTS": "VARIANTS", "WHITESPACE": "WS",
-               "MIXED_TYPES": "MIXED", "NUMBERS_IN_TEXT": "NUMTXT", "KEY_WITH_REPEATS": "KEYREP",
-               "INVALID_DATES": "INVALID", "FUTURE_DATES": "FUTURE", "IMPLAUSIBLY_OLD_DATES": "OLD",
-               "TWO_DIGIT_YEARS": "YY", "TYPO_VARIANTS": "TYPO", "HIDDEN_CHARACTERS": "HIDDEN", "MOJIBAKE": "MOJI",
-               "LEADING_ZEROS": "LZERO", "CONSTANT_COLUMN": "CONST", "PII_HINT": "PII", "OUTLIERS": "OUTLIER"}
 TAG_CODES = {"id": "id", "timestamp": "ts", "category": "cat", "status": "st", "priority": "pri", "money": "$",
              "quantity": "qty", "duration": "dur", "free_text": "txt", "person": "per", "contact_pii": "pii",
              "location": "loc", "other": "oth"}  # fmt: skip
@@ -109,8 +102,8 @@ def short_evidence(evidence: dict[str, Any]) -> str:
 
 
 def issue_line(issue: dict[str, Any]) -> str:
-    code = ISSUE_CODES.get(issue["code"], issue["code"])
-    return f"- {code} {issue['column'] or '(dataset)'}: {short_evidence(issue['evidence'])}"
+    """`- <issue id>: evidence` - the id is what rules cite in `addresses`."""
+    return f"- {issue.get('id') or issue_id(issue)}: {short_evidence(issue['evidence'])}"
 
 
 def _issue_columns(issue: dict[str, Any]) -> list[str]:
@@ -129,7 +122,7 @@ def column_line(p: dict[str, Any], codes: list[str], tag: str | None) -> str:
     ]
     if tag:
         parts.append("#" + TAG_CODES.get(tag, tag))
-    parts.append(",".join(ISSUE_CODES.get(c, c) for c in codes) if codes else "clean")
+    parts.append(",".join(SHORT_CODES.get(c, c) for c in codes) if codes else "clean")
     return "- " + " | ".join(parts)
 
 
@@ -154,7 +147,7 @@ def header_lines(inputs: CardInputs) -> list[str]:
         f" {s['near_duplicate_rows']} near | {partial} partial | {s['columns']} cols | {len(inputs.issues)} issues"),
         "Tools: get_column_profile(name), list_issues(severity). Values in <> are masked patterns (A=letters, 9=digits).",
         ("Columns: name | type(@conf if <100%) | missing | distinct | role | #tag | issues. Issue codes are short"
-         " forms of list_issues names. Evidence: n=count, sh=share, of=compared, ex=examples"),
+         " forms; issue ids are <code>:<column>. Evidence: n=count, sh=share, of=compared, ex=examples"),
     ]
 
 

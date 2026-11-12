@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import psycopg
+from psycopg import sql
 
 from pipeline.config import settings
 
@@ -22,4 +23,17 @@ def transaction() -> Iterator[psycopg.Connection]:
     would instead BEGIN/COMMIT on its own when no transaction is open yet).
     """
     with psycopg.connect(settings.database_url, autocommit=True) as conn, conn.transaction():
+        yield conn
+
+
+@contextmanager
+def get_ro_conn(timeout: str = "5s") -> Iterator[psycopg.Connection]:
+    """A READ ONLY transaction as role pipeline_ro with a statement timeout; always rolled back.
+
+    Used by agent tools and validator dry-runs: even a bug in generated SQL can't write.
+    """
+    with psycopg.connect(settings.database_url, autocommit=True) as conn, conn.transaction(force_rollback=True):
+        conn.execute("SET TRANSACTION READ ONLY")
+        conn.execute("SET LOCAL ROLE pipeline_ro")
+        conn.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(timeout)))
         yield conn

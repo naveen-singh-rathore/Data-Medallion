@@ -37,6 +37,14 @@ from pipeline.profile_columns import mask
 from pipeline.profile_config import PROFILE_CONFIG as CFG
 
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
+# Short issue codes: used in issue ids and on the card (the profile keeps the full `code` too).
+SHORT_CODES = {"DATE_ORDER": "ORDER", "MIXED_DATE_FORMATS": "DATEFMT", "AMBIGUOUS_DATES": "AMBIG",
+               "NULL_LIKE_TOKENS": "NULLTOK", "SENTINEL_VALUES": "SENTINEL", "UNPARSED_DATES": "UNPARSED",
+               "HIGH_EMPTY_RATE": "EMPTY", "NORMALIZATION_VARIANTS": "VARIANTS", "WHITESPACE": "WS",
+               "MIXED_TYPES": "MIXED", "NUMBERS_IN_TEXT": "NUMTXT", "KEY_WITH_REPEATS": "KEYREP",
+               "INVALID_DATES": "INVALID", "FUTURE_DATES": "FUTURE", "IMPLAUSIBLY_OLD_DATES": "OLD",
+               "TWO_DIGIT_YEARS": "YY", "TYPO_VARIANTS": "TYPO", "HIDDEN_CHARACTERS": "HIDDEN", "MOJIBAKE": "MOJI",
+               "LEADING_ZEROS": "LZERO", "CONSTANT_COLUMN": "CONST", "PII_HINT": "PII", "OUTLIERS": "OUTLIER"}
 
 Issue = dict[str, Any]
 
@@ -213,3 +221,20 @@ def sort_issues(issues: list[Issue], column_order: list[str]) -> list[Issue]:
         return SEVERITY_RANK[issue["severity"]], position.get(first_column, -1), issue["code"]
 
     return sorted(issues, key=key)
+
+
+def issue_id(issue: Issue) -> str:
+    """Stable id: <short code>:<column>, 'dataset' for dataset-level, `a>b` for column pairs."""
+    column = (issue["column"] or "dataset").replace(" > ", ">")
+    return f"{SHORT_CODES.get(issue['code'], issue['code'])}:{column}"
+
+
+def assign_ids(issues: list[Issue]) -> list[Issue]:
+    """Give every issue its id (in place order); a repeat of the same id gets ':<n>' appended."""
+    seen: dict[str, int] = {}
+    result = []
+    for issue in issues:
+        base = issue_id(issue)
+        seen[base] = seen.get(base, 0) + 1
+        result.append({"id": base if seen[base] == 1 else f"{base}:{seen[base]}", **issue})
+    return result

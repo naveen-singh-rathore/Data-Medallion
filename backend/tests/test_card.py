@@ -52,7 +52,7 @@ def pointer_counts(text: str) -> dict[str, int]:
 def assert_full_coverage(inputs: CardInputs, text: str) -> None:
     """Every column and issue is shown on its own line or counted in a pointer line."""
     shown_columns = sum(1 for c in inputs.columns if re.search(rf"^- {c['column']} \|", text, re.MULTILINE))
-    shown_issues = sum(1 for line in text.splitlines() if re.match(r"^- [A-Z_]+ \S", line) and "→" not in line)
+    shown_issues = sum(1 for line in text.splitlines() if re.match(r"^- [A-Z_]+:\S", line) and "→" not in line)
     pointers = pointer_counts(text)
     assert shown_columns + pointers["columns"] == len(inputs.columns)
     assert shown_issues + pointers["issues"] == len(inputs.issues)
@@ -80,7 +80,7 @@ def test_tiny_budget_keeps_tier0_and_counts_everything() -> None:
     card = build_card(inputs, 100)
     assert card.metrics["over_budget"]
     high = [i for i in inputs.issues if i["severity"] == "high"]
-    assert all(f"- HIGH_CODE {i['column']}:" in card.text for i in high)  # Tier 0 never dropped
+    assert all(f"- HIGH_CODE:{i['column']}:" in card.text for i in high)  # Tier 0 never dropped
     assert "Context (inferred, UNAPPROVED" in card.text and "## Critical columns" in card.text
     assert_full_coverage(inputs, card.text)
     assert card.metrics["tiers_full"] == {"tier0": True, "tier1": False, "tier2": False, "tier3": False}

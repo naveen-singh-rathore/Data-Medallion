@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from pipeline.agent_tools import TOOLS, run_tool
 from pipeline.bronze import get_run, ingest_file, recent_runs
 from pipeline.card import render_card
 from pipeline.config import settings
@@ -16,6 +17,9 @@ from pipeline.logging_setup import get_logger
 from pipeline.metrics import format_rows, run_metrics
 from pipeline.migrate import migrate
 from pipeline.profiling import latest_succeeded_run, load_profile, profile_run
+from pipeline.silver.defaults import default_rules
+from pipeline.silver.rules_schema import from_yaml, to_yaml
+from pipeline.silver.validator import validate_rules
 
 STUB_COMMANDS = ["build-silver", "build-gold"]
 
@@ -44,6 +48,15 @@ def _build_parser() -> argparse.ArgumentParser:
     card.add_argument("--exact", action="store_true", help="also count exact tokens with the provider (needs a key)")
     metrics = sub.add_parser("metrics", help="profile vs card size, context call cost, LLM spend")
     metrics.add_argument("--run-id", type=uuid.UUID)
+    tool = sub.add_parser("tool", help="run one agent tool by hand (logged like an agent call)")
+    tool.add_argument("name", help="tool name (see `tool list`)")
+    tool.add_argument("--run-id", type=uuid.UUID)
+    tool.add_argument("--args", default="{}", help="JSON arguments")
+    rules = sub.add_parser("validate-rules", help="validate a silver rules YAML file against a run")
+    rules.add_argument("path", type=Path)
+    rules.add_argument("--run-id", type=uuid.UUID)
+    defaults = sub.add_parser("default-rules", help="write default rules for issue-free columns (YAML to stdout)")
+    defaults.add_argument("--run-id", type=uuid.UUID)
     run_all = sub.add_parser("run-all", help="ingest a CSV, profile it, add context, render the card")
     run_all.add_argument("path", help="path to the CSV file")
     run_all.add_argument("--force", action="store_true", help="reload even if already ingested")
@@ -140,6 +153,14 @@ def _card(run_id: uuid.UUID, budget: int | None = None, show: bool = True, exact
     print(format_rows(run_metrics(run_id)))
 
 
+def _tool(name: str, raw_args: str, run_id: uuid.UUID) -> None:
+    if name == "list":
+        for tool_name, (_, _, desc) in TOOLS.items():
+            print(f"{tool_name:<20} {desc}")
+        return
+    print(json.dumps(run_tool(name, json.loads(raw_args), run_id), indent=2, ensure_ascii=False, default=str))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "init-db":
@@ -163,6 +184,14 @@ def main(argv: list[str] | None = None) -> int:
         _card(args.run_id or latest_succeeded_run(), args.budget, show=args.show, exact=args.exact)
     elif args.command == "metrics":
         print(format_rows(run_metrics(args.run_id or latest_succeeded_run())))
+    elif args.command == "tool":
+        _tool(args.name, args.args, args.run_id or latest_succeeded_run())
+    elif args.command == "validate-rules":
+        report = validate_rules(from_yaml(args.path.read_text(encoding="utf-8")), args.run_id or latest_succeeded_run())
+        print(report.feedback())
+        return 0 if report.ok else 1
+    elif args.command == "default-rules":
+        print(to_yaml(default_rules(args.run_id or latest_succeeded_run())))
     elif args.command == "run-all":
         run_id = ingest_file(args.path, force=args.force)
         print(format_funnel(get_run(run_id)))

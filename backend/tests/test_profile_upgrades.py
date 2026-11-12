@@ -189,12 +189,8 @@ def test_profiling_twice_is_identical_and_within_budget(upgraded) -> None:
 
 # --- generic ---------------------------------------------------------------------
 
-PROFILER_MODULES = ["profiling.py", "profile_columns.py", "profile_values.py", "profile_dates.py",
-                    "profile_issues.py", "profile_config.py"]  # fmt: skip
-
-
-def test_profiler_code_has_no_dataset_column_names() -> None:
-    """No string literal in the profiler equals a column name of the real dataset."""
+def test_pipeline_code_has_no_dataset_column_names() -> None:
+    """No string literal anywhere in pipeline/ equals a column name of the real dataset."""
     raw = REPO_ROOT / "data" / "raw_tickets.csv"
     if not raw.exists():
         pytest.skip("data/raw_tickets.csv not present")
@@ -203,8 +199,8 @@ def test_profiler_code_has_no_dataset_column_names() -> None:
     package = Path(__file__).parents[1] / "pipeline"
     literals = {
         node.value.strip().lower()
-        for module in PROFILER_MODULES
-        for node in ast.walk(ast.parse((package / module).read_text()))
+        for module in sorted(package.rglob("*.py"))
+        for node in ast.walk(ast.parse(module.read_text()))
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     }
     # context tags are a fixed vocabulary (pipeline/context.py), not dataset column names

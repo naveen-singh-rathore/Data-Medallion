@@ -85,6 +85,20 @@ sla_hours. Tags: submitted_by and assigned_to = person (so they are masked in ev
 **Human (`context/raw_tickets.md`):** _to be added_ - then run
 `context --context-file ../context/raw_tickets.md` and `context --compare`.
 
+## Silver rules and agent tools
+
+Rules are YAML (`rules/<run>/proposed.yaml`, approved: `rules/silver_rules.yaml`), validated by
+`pipeline/silver/validator.py` and compiled to SQL by `pipeline/silver/compiler.py`
+(compiled SQL is written to `build/compiled/<run>/<rules_hash>.sql` for review). Example:
+
+```bash
+cd backend
+../.venv/bin/python -m pipeline.cli default-rules                 # defaults for issue-free columns
+../.venv/bin/python -m pipeline.cli validate-rules ../rules/examples/three_columns.yaml
+../.venv/bin/python -m pipeline.cli tool list                     # the agent's tools
+../.venv/bin/python -m pipeline.cli tool list_issues --args '{"severity": "high"}'
+```
+
 ## Scaling to 100x
 
 - **Bronze:** one transaction per run is fine for ~10k rows. For very large files,

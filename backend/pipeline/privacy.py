@@ -72,14 +72,26 @@ def minimize(value: Any, policy: str) -> Any:
     return mask_value(value)
 
 
-def redact(obj: Any, policy: str, policies: dict[str, str]) -> Any:
+# Keys whose values describe structure, not data (never masked inside a profile).
+STRUCTURAL_KEYS = frozenset({"column", "role_hint", "dominant_type", "format", "kind", "hint", "code", "severity",
+                             "id", "top_masks", "conflicting_order_formats", "name_matches"})  # fmt: skip
+
+
+def redact(obj: Any, policy: str, policies: dict[str, str], keep: frozenset[str] = frozenset()) -> Any:
     """Apply `policy` to every string leaf; a dict key that is a column name switches to that
-    column's policy for its subtree (e.g. the `differs` map of a key-repeat example)."""
+    column's policy for its subtree (e.g. the `differs` map of a key-repeat example).
+    Values under a key in `keep` are left as they are."""
     if isinstance(obj, dict):
-        return {k: redact(v, policies.get(k, policy) if isinstance(k, str) else policy, policies) for k, v in obj.items()}
+        return {k: v if k in keep else redact(v, policies.get(k, policy) if isinstance(k, str) else policy, policies, keep)
+                for k, v in obj.items()}  # fmt: skip
     if isinstance(obj, list | tuple):
-        return [redact(v, policy, policies) for v in obj]
+        return [redact(v, policy, policies, keep) for v in obj]
     return minimize(obj, policy)
+
+
+def redact_profile(profile: dict[str, Any], policies: dict[str, str]) -> dict[str, Any]:
+    """A column profile as an LLM may see it: data values minimized, structure kept."""
+    return redact(profile, policies.get(profile["column"], "mask"), {}, STRUCTURAL_KEYS)
 
 
 def issue_policy(issue: dict[str, Any], policies: dict[str, str]) -> str:

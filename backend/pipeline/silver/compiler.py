@@ -1,0 +1,329 @@
+"""Rules -> SQL. The only place silver SQL is written.
+
+Everything that comes from a rule (names, sources, tokens, formats, ranges) enters the query
+through psycopg.sql.Identifier / Literal - never string formatting. The fixed SQL around it
+only uses the safe helpers in db/sql/007_silver_functions.sql, so a bad value becomes NULL plus
+an error entry, never an exception.
+
+Query shape (one SELECT over bronze.records, nested layers):
+  s1 clean text (steps, blanks -> NULL) -> s2 null tokens / sentinels -> s3 mapping ->
+  s4 typed values + per-value problems -> s5 row checks -> final: values, <col>_raw,
+  _quality_flags (per column: fixes applied), _errors, _rejected, _dup_rank.
+"""
+
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from psycopg import sql
+
+from pipeline.config import REPO_ROOT
+from pipeline.profile_config import PROFILE_CONFIG as CFG
+from pipeline.profile_dates import format_by_id, pg_pattern
+from pipeline.profile_values import normalization_key
+from pipeline.silver.rules_schema import ColumnRule, RowCheck, SilverRules, rules_hash
+
+COMPILED_DIR = REPO_ROOT / "build" / "compiled"
+OUTPUT_COLUMNS = frozenset({"bronze_id", "row_hash", "_quality_flags", "_errors", "_rejected", "_dup_rank"})
+FLAG_CHUNK = 40  # jsonb_build_object takes at most 100 arguments
+
+_CURRENCY = f"[{CFG.currency_symbols}]|\\m({'|'.join(CFG.currency_codes)})\\M"
+STEP_SQL: dict[str, tuple[str, str]] = {  # (prefix, suffix) around the inner expression
+    "trim": ("regexp_replace(", ", '^[[:space:]\\u00a0]+|[[:space:]\\u00a0]+$', '', 'g')"),
+    "collapse_spaces": ("regexp_replace(", ", '[[:space:]\\u00a0]+', ' ', 'g')"),
+    "remove_hidden_chars": (
+        "regexp_replace(",
+        ", '[\\u200b-\\u200d\\u2060\\ufeff\\u0001-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]', '', 'g')",
+    ),
+    "lower": ("lower(", ")"),
+    "upper": ("upper(", ")"),
+    "title": ("initcap(", ")"),
+    "strip_currency": ("btrim(regexp_replace(", f", '{_CURRENCY}', '', 'gi'))"),
+    "strip_thousands": ("silver.strip_thousands(", ")"),
+    "strip_percent": ("regexp_replace(", ", '[[:space:]]*%[[:space:]]*$', '')"),
+    "strip_units": ("regexp_replace(", ", '^([+-]?[0-9.,]+)[[:space:]]*[[:alpha:]]+\\.?$', '\\1')"),
+    "european_decimal": ("silver.european_decimal(", ")"),
+}
+
+
+@dataclass(frozen=True)
+class CompiledSQL:
+    query: sql.Composed
+    text: str  # rendered SQL (parameters stay as %(run_id)s / %(sample)s)
+    params: dict[str, Any]
+    rules_hash: str
+    columns: list[str]
+    raw_columns: list[str]
+
+
+def _id(name: str, suffix: str = "") -> sql.Identifier:
+    return sql.Identifier(f"{name}{suffix}")
+
+
+def _text_array(values: list[str]) -> sql.Composable:
+    if not values:
+        return sql.SQL("ARRAY[]::text[]")
+    return sql.SQL("ARRAY[{}]::text[]").format(sql.SQL(", ").join(sql.Literal(v) for v in values))
+
+
+def has_raw_column(rule: ColumnRule) -> bool:
+    """<col>_raw is kept when the value can change type or be nulled by a sentinel/mapping."""
+    return rule.type != "text" or bool(rule.sentinels) or bool(rule.mapping)
+
+
+# --- per-column expressions ----------------------------------------------------------
+
+
+def clean_expr(rule: ColumnRule) -> sql.Composable:
+    expr: sql.Composable = sql.SQL("(payload ->> {})").format(sql.Literal(rule.source))
+    for step in rule.steps:
+        prefix, suffix = STEP_SQL[step]
+        expr = sql.Composed([sql.SQL(prefix), expr, sql.SQL(suffix)])
+    return sql.SQL("silver.blank_to_null({})").format(expr)
+
+
+def sentinel_expr(rule: ColumnRule, clean: sql.Composable) -> sql.Composable:
+    if not rule.sentinels:
+        return sql.SQL("false")
+    text_hit = sql.SQL("{} = ANY({})").format(clean, _text_array(rule.sentinels))
+    numbers = [s for s in rule.sentinels if _is_number(s)]
+    if rule.type in ("integer", "numeric") and numbers:
+        number_hit = sql.SQL("silver.try_numeric({}) = ANY(ARRAY[{}]::numeric[])").format(
+            clean, sql.SQL(", ").join(sql.Literal(float(n)) for n in numbers)
+        )
+        return sql.SQL("coalesce({} OR {}, false)").format(text_hit, number_hit)
+    return sql.SQL("coalesce({}, false)").format(text_hit)
+
+
+def _is_number(value: str) -> bool:
+    try:
+        float(value)
+    except ValueError:
+        return False
+    return True
+
+
+def mapping_keys(rule: ColumnRule) -> dict[str, str]:
+    """normalization key -> target value (each target also maps to itself)."""
+    keys: dict[str, str] = {}
+    for target, variants in (rule.mapping or {}).items():
+        for variant in [target, *variants]:
+            keys.setdefault(normalization_key(variant), target)
+    return keys
+
+
+def mapped_expr(rule: ColumnRule, value: sql.Composable) -> tuple[sql.Composable, sql.Composable]:
+    """(mapped value, is-unmapped flag)."""
+    if not rule.mapping:
+        return value, sql.SQL("false")
+    keys = mapping_keys(rule)
+    key = sql.SQL("silver.norm_key({})").format(value)
+    whens = sql.SQL(" ").join(sql.SQL("WHEN {} THEN {}").format(sql.Literal(k), sql.Literal(t)) for k, t in keys.items())
+    unmapped = {"keep": value, "null": sql.SQL("NULL"), "invalid": sql.SQL("NULL")}[rule.unmapped_action]
+    mapped = sql.SQL("CASE {} {} ELSE {} END").format(key, whens, unmapped)
+    is_unmapped = sql.SQL("({} IS NOT NULL AND NOT coalesce({} = ANY({}), false))").format(
+        value, key, _text_array(list(keys))
+    )
+    return mapped, is_unmapped
+
+
+def typed_expr(rule: ColumnRule, value: sql.Composable) -> sql.Composable:
+    if rule.type == "text":
+        return value
+    if rule.type == "integer":
+        return sql.SQL("silver.try_int({})").format(value)
+    if rule.type == "numeric":
+        return sql.SQL("silver.try_numeric({})").format(value)
+    if rule.type == "boolean":
+        return sql.SQL("silver.try_bool({}, {}, {})").format(
+            value, _text_array(rule.boolean_true), _text_array(rule.boolean_false)
+        )
+    attempts = []
+    for format_id in rule.parse_formats:
+        fmt = format_by_id(format_id)
+        if fmt is None:  # the validator rejects unknown ids; the compiler just refuses
+            raise ValueError(f"unknown date format id {format_id!r}")
+        pattern = pg_pattern(fmt, day_first=rule.day_month_order == "dmy")
+        attempts.append(sql.SQL("silver.try_ts({}, {}, {})").format(value, sql.Literal(fmt.regex.pattern), sql.Literal(pattern)))
+    parsed = sql.SQL("coalesce({})").format(sql.SQL(", ").join(attempts)) if attempts else sql.SQL("NULL::timestamp")
+    return sql.SQL("({})::date").format(parsed) if rule.type == "date" else parsed
+
+
+def range_expr(rule: ColumnRule, typed: sql.Composable) -> sql.Composable:
+    if not rule.range or (rule.range.min is None and rule.range.max is None):
+        return sql.SQL("false")
+    cast = {"date": "::date", "timestamp": "::timestamp"}.get(rule.type, "::numeric")
+    parts = []
+    if rule.range.min is not None:
+        parts.append(sql.SQL("{} < {}" + cast).format(typed, sql.Literal(rule.range.min)))
+    if rule.range.max is not None:
+        parts.append(sql.SQL("{} > {}" + cast).format(typed, sql.Literal(rule.range.max)))
+    return sql.SQL("coalesce({}, false)").format(sql.SQL(" OR ").join(parts))
+
+
+# --- row checks ----------------------------------------------------------------------
+
+
+def row_check_failure(check: RowCheck) -> sql.Composable:
+    p = check.params
+    if check.kind == "date_order":
+        return sql.SQL("coalesce({} > {}, false)").format(sql.Identifier(p["a"]), sql.Identifier(p["b"]))
+    if check.kind == "not_both_null":
+        return sql.SQL("({} IS NULL AND {} IS NULL)").format(sql.Identifier(p["a"]), sql.Identifier(p["b"]))
+    values = p["values"] if isinstance(p["values"], list) else [p["values"]]
+    return sql.SQL("({} IS NULL AND {}::text = ANY({}))").format(
+        sql.Identifier(p["column"]), sql.Identifier(p["other"]), _text_array(values)
+    )
+
+
+def _check_label(check: RowCheck) -> str:
+    p = check.params
+    names = [p["a"], p["b"]] if check.kind != "required_if" else [p["column"], p["other"]]
+    return f"row:{check.kind}:{','.join(str(n) for n in names)}"
+
+
+# --- assembly ------------------------------------------------------------------------
+
+
+def _source_filter(sample: int | None) -> sql.Composable:
+    base = sql.SQL("run_id = %(run_id)s AND parse_status = 'ok'")
+    if sample is None:
+        return base
+    return sql.SQL(
+        "{} AND bronze_id IN (SELECT bronze_id FROM bronze.records WHERE run_id = %(run_id)s"
+        " AND parse_status = 'ok' ORDER BY md5(row_hash), bronze_id LIMIT %(sample)s)"
+    ).format(base)
+
+
+def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) -> CompiledSQL:
+    """Pure: rules -> SELECT over the run's ok bronze rows (optionally a fixed hash sample)."""
+    cols = rules.columns
+    s1 = [sql.SQL("{} AS {}").format(clean_expr(c), _id(c.name, "__c")) for c in cols]
+    s2 = []
+    for c in cols:
+        clean = _id(c.name, "__c")
+        token = (sql.SQL("coalesce(lower({}) = ANY({}), false)").format(clean, _text_array([t.lower() for t in c.null_tokens]))
+                 if c.null_tokens else sql.SQL("false"))  # fmt: skip
+        s2 += [sql.SQL("{} AS {}").format(token, _id(c.name, "__tok")),
+               sql.SQL("{} AS {}").format(sentinel_expr(c, clean), _id(c.name, "__sen"))]  # fmt: skip
+    s3 = []
+    for c in cols:
+        value = sql.SQL("CASE WHEN {} OR {} THEN NULL ELSE {} END").format(
+            _id(c.name, "__tok"), _id(c.name, "__sen"), _id(c.name, "__c")
+        )
+        mapped, unmapped = mapped_expr(c, value)
+        s3 += [sql.SQL("{} AS {}").format(value, _id(c.name, "__v")), sql.SQL("{} AS {}").format(mapped, _id(c.name, "__m")),
+               sql.SQL("{} AS {}").format(unmapped, _id(c.name, "__unm"))]  # fmt: skip
+    s4 = []
+    for c in cols:
+        typed = typed_expr(c, _id(c.name, "__m"))
+        s4 += [sql.SQL("{} AS {}").format(typed, _id(c.name, "__t")),
+               sql.SQL("({} IS NOT NULL AND {} IS NULL) AS {}").format(_id(c.name, "__m"), typed, _id(c.name, "__bad")),
+               sql.SQL("{} AS {}").format(range_expr(c, typed), _id(c.name, "__oor"))]  # fmt: skip
+    s5 = [sql.SQL("CASE WHEN {} THEN NULL ELSE {} END AS {}").format(_id(c.name, "__oor"), _id(c.name, "__t"), _id(c.name))
+          for c in cols]  # fmt: skip
+
+    checks = rules.row_checks
+    nulled_by_check = {c.params["b"]: [] for c in checks if c.action == "null_second"}
+    for i, check in enumerate(checks):
+        if check.action == "null_second":
+            nulled_by_check[check.params["b"]].append(i)
+    s6 = [sql.SQL("{} AS {}").format(row_check_failure(ch), _id(f"_chk{i}")) for i, ch in enumerate(checks)]
+
+    final_values = []
+    for c in cols:
+        drops = nulled_by_check.get(c.name, [])
+        if drops:
+            cond = sql.SQL(" OR ").join(_id(f"_chk{i}") for i in drops)
+            final_values.append(sql.SQL("CASE WHEN {} THEN NULL ELSE {} END AS {}").format(cond, _id(c.name), _id(c.name)))
+        else:
+            final_values.append(_id(c.name))
+    raw_cols = [c for c in cols if has_raw_column(c)]
+    raw_select = [sql.SQL("(payload ->> {}) AS {}").format(sql.Literal(c.source), _id(c.name, "_raw")) for c in raw_cols]
+
+    def column_flags(c: ColumnRule) -> sql.Composable:
+        nulled = [f"_chk{i}" for i in nulled_by_check.get(c.name, [])]
+        items = [
+            sql.SQL("CASE WHEN {} IS DISTINCT FROM (payload ->> {}) AND {} IS NOT NULL THEN 'cleaned' END").format(
+                _id(c.name, "__c"), sql.Literal(c.source), _id(c.name, "__c")),
+            sql.SQL("CASE WHEN {} THEN 'null_token' END").format(_id(c.name, "__tok")),
+            sql.SQL("CASE WHEN {} THEN 'sentinel:' || {} END").format(_id(c.name, "__sen"), _id(c.name, "__c")),
+            sql.SQL("CASE WHEN {} IS DISTINCT FROM {} AND {} IS NOT NULL THEN 'mapped' END").format(
+                _id(c.name, "__m"), _id(c.name, "__v"), _id(c.name, "__m")),
+            sql.SQL("CASE WHEN {} THEN 'unmapped' END").format(_id(c.name, "__unm")),
+            sql.SQL("CASE WHEN {} THEN 'unparseable' END").format(_id(c.name, "__bad")),
+            sql.SQL("CASE WHEN {} THEN 'out_of_range' END").format(_id(c.name, "__oor")),
+            *[sql.SQL("CASE WHEN {} THEN 'nulled_by_row_check' END").format(_id(n)) for n in nulled],
+        ]  # fmt: skip
+        return sql.SQL("silver.flags({})").format(sql.SQL(", ").join(items))
+
+    chunks = [cols[i : i + FLAG_CHUNK] for i in range(0, len(cols), FLAG_CHUNK)]
+    flags = sql.SQL(" || ").join(
+        sql.SQL("jsonb_build_object({})").format(
+            sql.SQL(", ").join(sql.SQL("{}, {}").format(sql.Literal(c.name), column_flags(c)) for c in chunk)
+        )
+        for chunk in chunks
+    )
+
+    def column_errors(c: ColumnRule) -> list[tuple[sql.Composable, bool]]:
+        """(error expression, rejects row?)."""
+        reject = c.invalid_action == "reject"
+        found = [
+            (sql.SQL("CASE WHEN {} THEN {} END").format(_id(c.name, "__bad"), sql.Literal(f"{c.name}:unparseable")), reject),
+            (sql.SQL("CASE WHEN {} THEN {} END").format(_id(c.name, "__oor"), sql.Literal(f"{c.name}:out_of_range")), reject),
+        ]  # fmt: skip
+        if c.mapping and c.unmapped_action == "invalid":
+            found.append((sql.SQL("CASE WHEN {} THEN {} END").format(_id(c.name, "__unm"), sql.Literal(f"{c.name}:unmapped")), reject))
+        if c.required:
+            found.append((sql.SQL("CASE WHEN {} IS NULL THEN {} END").format(_id(c.name), sql.Literal(f"{c.name}:required_missing")),
+                          reject))  # fmt: skip
+        return found
+
+    errors = [e for c in cols for e in column_errors(c)]
+    errors += [(sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), sql.Literal(_check_label(ch))), ch.action == "reject")
+               for i, ch in enumerate(checks)]  # fmt: skip
+    error_array = sql.SQL("array_remove(ARRAY[{}]::text[], NULL)").format(
+        sql.SQL(", ").join(e for e, _ in errors)) if errors else sql.SQL("ARRAY[]::text[]")  # fmt: skip
+    rejecting = [e for e, rejects in errors if rejects]
+    rejected = (sql.SQL("(array_length(array_remove(ARRAY[{}]::text[], NULL), 1) IS NOT NULL)").format(
+        sql.SQL(", ").join(rejecting)) if rejecting else sql.SQL("false"))  # fmt: skip
+
+    dedup = rules.dedup
+    if dedup:
+        order = (sql.SQL("{} DESC NULLS LAST, bronze_id").format(sql.Identifier(dedup.order_by))
+                 if dedup.strategy == "keep_latest" and dedup.order_by else sql.SQL("bronze_id"))  # fmt: skip
+        dup_rank = sql.SQL("row_number() OVER (PARTITION BY {} ORDER BY {})").format(
+            sql.SQL(", ").join(sql.Identifier(k) for k in dedup.key), order)  # fmt: skip
+    else:
+        dup_rank = sql.SQL("1")
+
+    def layer(select: list[sql.Composable], inner: sql.Composable, alias: str) -> sql.Composable:
+        items = sql.SQL(", ").join([sql.SQL("*"), *select]) if select else sql.SQL("*")
+        return sql.SQL("SELECT {} FROM ({}) AS {}").format(items, inner, sql.Identifier(alias))
+
+    base = sql.SQL("SELECT bronze_id, row_hash, payload FROM bronze.records WHERE {}").format(_source_filter(sample))
+    inner = layer(s6, layer(s5, layer(s4, layer(s3, layer(s2, layer(s1, base, "s1"), "s2"), "s3"), "s4"), "s5"), "s6")
+    final = sql.SQL(", ").join([
+        sql.SQL("bronze_id"), sql.SQL("row_hash"), *final_values, *raw_select,
+        sql.SQL("jsonb_strip_nulls({}) AS _quality_flags").format(flags), sql.SQL("{} AS _errors").format(error_array),
+        sql.SQL("{} AS _rejected").format(rejected),
+    ])  # fmt: skip
+    ranked = sql.SQL("SELECT {} FROM ({}) AS s7").format(final, inner)
+    query = sql.SQL("SELECT *, {} AS _dup_rank FROM ({}) AS s8").format(dup_rank, ranked)
+    params: dict[str, Any] = {"run_id": run_id} | ({"sample": sample} if sample is not None else {})
+    return CompiledSQL(query=query, text=query.as_string(None), params=params, rules_hash=rules_hash(rules),
+                       columns=[c.name for c in cols], raw_columns=[f"{c.name}_raw" for c in raw_cols])  # fmt: skip
+
+
+def write_compiled(compiled: CompiledSQL, run_id: str) -> Path:
+    """build/compiled/<run>/<rules_hash>.sql, for review."""
+    path = COMPILED_DIR / run_id / f"{compiled.rules_hash}.sql"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = f"-- rules {compiled.rules_hash}, params: run_id, sample\n"
+    path.write_text(header + compiled.text + "\n")
+    return path
+
+
+def sql_digest(compiled: CompiledSQL) -> str:
+    return hashlib.sha256(compiled.text.encode()).hexdigest()[:16]

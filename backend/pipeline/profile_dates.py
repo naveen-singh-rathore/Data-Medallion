@@ -38,6 +38,51 @@ def _fmt(label: str, regex: str, strptime: str | None, has_time: bool, *day_firs
     return DateFormat(label, re.compile(regex), strptime, has_time, *day_first, **kw)
 
 
+# strptime directive -> Postgres to_timestamp pattern (the silver compiler parses with these)
+_PG_TOKENS = {"%Y": "YYYY", "%m": "MM", "%d": "DD", "%H": "HH24", "%M": "MI", "%S": "SS", "%I": "HH12",
+              "%p": "AM", "%b": "Mon", "%B": "FMMonth", "%y": "YY", "%f": "US", "%z": "TZH:TZM"}  # fmt: skip
+
+
+def pg_format(strptime: str, label: str) -> str:
+    """Postgres pattern for a strptime pattern: letters that aren't directives are quoted;
+    a literal trailing Z (UTC) becomes "Z" (Postgres can't read Z as an offset)."""
+    if label.endswith("Z"):
+        strptime = strptime.replace("%z", "Z")
+    out, i = [], 0
+    while i < len(strptime):
+        token = strptime[i : i + 2]
+        if token in _PG_TOKENS:
+            out.append(_PG_TOKENS[token])
+            i += 2
+            continue
+        out.append(f'"{strptime[i]}"' if strptime[i].isalpha() else strptime[i])
+        i += 1
+    return "".join(out)
+
+
+def format_by_id(format_id: str) -> DateFormat | None:
+    """Registry lookup by label; a day-first label (DD/MM/...) finds its shared-shape entry."""
+    return next((f for f in DATE_FORMATS if format_id in (f.label, f.day_first_label)), None)
+
+
+def format_ids() -> list[str]:
+    return [label for f in DATE_FORMATS for label in (f.label, f.day_first_label) if label]
+
+
+def is_ambiguous_shape(fmt: DateFormat) -> bool:
+    """NN/NN/YYYY-style: the same text reads differently day-first and month-first."""
+    return fmt.day_first_label is not None
+
+
+def pg_pattern(fmt: DateFormat, day_first: bool) -> str:
+    """Postgres pattern (or EPOCH / EPOCH_MS / EXCEL for numeric kinds) for one format."""
+    if fmt.kind != "strptime":
+        return {"epoch_s": "EPOCH", "epoch_ms": "EPOCH_MS", "excel": "EXCEL"}[fmt.kind]
+    if day_first and fmt.day_first_strptime and fmt.day_first_label:
+        return pg_format(fmt.day_first_strptime, fmt.day_first_label)
+    return pg_format(fmt.strptime or "", fmt.label)
+
+
 _DM = r"(\d{1,2})"
 _ISO = r"\d{4}-\d{1,2}-\d{1,2}T\d{1,2}:\d{2}:\d{2}"
 _OFFSET = r"[+-]\d{2}:?\d{2}"
