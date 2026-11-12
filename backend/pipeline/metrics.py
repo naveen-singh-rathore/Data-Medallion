@@ -24,7 +24,8 @@ def run_metrics(run_id: uuid.UUID) -> list[tuple[str, str]]:
     ]
     card = latest_card(run_id)
     if card:
-        exact = f", exact {card['exact_tokens']:,}" if card["exact_tokens"] else " (exact: run `card --exact`)"
+        exact = (f", exact {card['exact_tokens']:,} ({card['chars_per_token']} chars/token)" if card["exact_tokens"]
+                 else " (exact: run `card --exact`)")
         rows += [
             ("card tokens", (f"~{card['est_tokens']:,} est.{exact} | budget {card['budget_tokens']:,}"
              f"{' | OVER BUDGET' if card['over_budget'] else ''}")),
@@ -40,7 +41,7 @@ def run_metrics(run_id: uuid.UUID) -> list[tuple[str, str]]:
         context = conn.execute(
             "SELECT c.source, c.approved, l.model, l.input_tokens, l.output_tokens, l.cost_usd, l.latency_ms,"
             " l.cache_hit FROM meta.dataset_context c LEFT JOIN meta.llm_calls l ON l.call_id = c.llm_call_id"
-            " WHERE c.run_id = %s",
+            " WHERE c.run_id = %s ORDER BY c.source = 'human' DESC LIMIT 1",
             (run_id,),
         ).fetchone()
         spend = conn.execute(

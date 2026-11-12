@@ -19,8 +19,10 @@ class FakeMessages:
         self.calls: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Any) -> FakeResponse:
+        """Replies in order when `reply` is a list (the last one repeats), else the same reply."""
         self.calls.append(kwargs)
-        text = self.reply if isinstance(self.reply, str) else json.dumps(self.reply)
+        reply = self.reply[min(len(self.calls), len(self.reply)) - 1] if isinstance(self.reply, list) else self.reply
+        text = reply if isinstance(reply, str) else json.dumps(reply)
         return FakeResponse({
             "id": "msg_fake", "type": "message", "role": "assistant", "model": kwargs["model"],
             "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": text}],
@@ -31,6 +33,10 @@ class FakeMessages:
 class FakeClient:
     def __init__(self, reply: Any, usage: dict[str, int] | None = None) -> None:
         self.messages = FakeMessages(reply, usage)
+
+    def payloads(self) -> str:
+        """Everything sent to the model so far, as one string (for leak assertions)."""
+        return json.dumps(self.messages.calls, ensure_ascii=False)
 
 
 class ExplodingClient:

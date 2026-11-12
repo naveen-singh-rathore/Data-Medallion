@@ -27,6 +27,7 @@ class Settings:
     main_model: str
     llm_mode: str  # live | replay | record (see pipeline/llm.py)
     card_budget_tokens: int
+    card_chars_per_token: float  # token estimate when no exact count exists (measured ~1.94 on raw_tickets)
 
 
 def _load() -> Settings:
@@ -48,6 +49,7 @@ def _load() -> Settings:
         main_model=os.getenv("MAIN_MODEL", "claude-opus-5-5"),
         llm_mode=llm_mode,
         card_budget_tokens=int(os.getenv("CARD_BUDGET_TOKENS", "4000")),
+        card_chars_per_token=float(os.getenv("CARD_CHARS_PER_TOKEN", "2")),
     )
 
 

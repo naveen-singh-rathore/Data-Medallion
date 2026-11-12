@@ -11,11 +11,16 @@ The card is what the agent reads first on every turn; details stay behind tools
 A tier that doesn't fit is compressed: as many lines as fit, then one pointer line that
 counts the rest. Room for every later tier's pointer is reserved up front, so every
 column and every issue is either shown or counted - never silently omitted.
-Tokens are estimated as ceil(chars / 4).
+
+Tokens are estimated as ceil(chars / CARD_CHARS_PER_TOKEN) (default 2). With an exact count
+(`card --exact`) the budget decision uses the provider's number: if the card is over, it is
+re-rendered with the measured chars-per-token ratio. Values are minimized per column
+(pipeline.privacy) before they reach the card.
 """
 
 import hashlib
 import math
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,11 +31,27 @@ from psycopg.types.json import Jsonb
 from pipeline.config import settings
 from pipeline.db import transaction
 from pipeline.logging_setup import get_logger
+from pipeline.privacy import column_policies, redact_issue
 from pipeline.profile_issues import SEVERITY_RANK
 
-RENDERER_VERSION = "1.0"
-EVIDENCE_CHARS = 140
+RENDERER_VERSION = "1.1"
+EVIDENCE_CHARS = 80
 POINTER_NAMES = 3
+EXACT_ATTEMPTS = 3
+# Short forms on the card (the legend line explains them); full names stay in the profile JSON.
+EVIDENCE_KEYS = {"examples": "ex", "count": "n", "share": "sh", "compared": "of", "punctuation_only": "punct",
+                 "unambiguous_share": "unambig_sh", "unambiguous_compared": "unambig_of"}
+ISSUE_CODES = {"DATE_ORDER": "ORDER", "MIXED_DATE_FORMATS": "DATEFMT", "AMBIGUOUS_DATES": "AMBIG",
+               "NULL_LIKE_TOKENS": "NULLTOK", "SENTINEL_VALUES": "SENTINEL", "UNPARSED_DATES": "UNPARSED",
+               "HIGH_EMPTY_RATE": "EMPTY", "NORMALIZATION_VARIANTS": "VARIANTS", "WHITESPACE": "WS",
+               "MIXED_TYPES": "MIXED", "NUMBERS_IN_TEXT": "NUMTXT", "KEY_WITH_REPEATS": "KEYREP",
+               "INVALID_DATES": "INVALID", "FUTURE_DATES": "FUTURE", "IMPLAUSIBLY_OLD_DATES": "OLD",
+               "TWO_DIGIT_YEARS": "YY", "TYPO_VARIANTS": "TYPO", "HIDDEN_CHARACTERS": "HIDDEN", "MOJIBAKE": "MOJI",
+               "LEADING_ZEROS": "LZERO", "CONSTANT_COLUMN": "CONST", "PII_HINT": "PII", "OUTLIERS": "OUTLIER"}
+TAG_CODES = {"id": "id", "timestamp": "ts", "category": "cat", "status": "st", "priority": "pri", "money": "$",
+             "quantity": "qty", "duration": "dur", "free_text": "txt", "person": "per", "contact_pii": "pii",
+             "location": "loc", "other": "oth"}  # fmt: skip
+ROLE_CODES = {"candidate_key": "key", "categorical": "cat", "free_text": "text", "constant": "const", "other": "other"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +59,7 @@ class CardInputs:
     run_id: str
     source_file: str
     context: dict[str, Any] | None  # meta.dataset_context row
+    profiler: dict[str, Any] | None  # summary["profiler"]: version + config hash
     summary: dict[str, Any]
     issues: list[dict[str, Any]]
     columns: list[dict[str, Any]]  # column profiles in header order
@@ -50,34 +72,45 @@ class CardResult:
     metrics: dict[str, Any]
 
 
-def estimate_tokens(text: str) -> int:
-    return math.ceil(len(text) / 4)
+def estimate_tokens(text: str, chars_per_token: float | None = None) -> int:
+    return math.ceil(len(text) / (chars_per_token or settings.card_chars_per_token))
 
 
 # --- line formatting -----------------------------------------------------------------
 
 
+_PLAIN = re.compile(r"[^\s,=\[\]{}'\"×]+")
+
+
 def _value(v: Any) -> str:
+    if isinstance(v, dict) and "value" in v and "count" in v:  # sentinel-like: '999'×557
+        return f"{_value(v['value'])}×{v['count']}"
+    if isinstance(v, dict) and "format" in v and "share" in v:  # date format share: YYYY-MM-DD 0.26
+        return f"{v['format']} {v['share']:.2g}"
     if isinstance(v, dict):  # up to 4 keys: jsonb reorders keys, so a smaller cut can hide the key fact
         items = list(v.items())
-        more = ", …" if len(items) > 4 else ""
-        return "{" + ", ".join(f"{k}: {_value(x)}" for k, x in items[:4]) + more + "}"
+        return "{" + ",".join(f"{k}:{_value(x)}" for k, x in items[:4]) + (",…" if len(items) > 4 else "") + "}"
+    if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], int):  # [value, count]
+        return f"{_value(v[0])}×{v[1]}"
     if isinstance(v, list):
-        return "[" + ", ".join(_value(x) for x in v[:2]) + (", …" if len(v) > 2 else "") + "]"
+        return "[" + ",".join(_value(x) for x in v[:2]) + (",…" if len(v) > 2 else "") + "]"
     if isinstance(v, float):
-        return f"{v:.4g}"
+        return f"{v:.3g}"
     if isinstance(v, str):
-        return repr(v[:40] + ("…" if len(v) > 40 else ""))
+        text = v[:24] + ("…" if len(v) > 24 else "")
+        return text if text and _PLAIN.fullmatch(text) else repr(text)  # quotes only where needed
     return str(v)
 
 
 def short_evidence(evidence: dict[str, Any]) -> str:
-    text = " ".join(f"{k}={_value(v)}" for k, v in evidence.items() if v not in ({}, [], None))
+    """Compact key=value evidence, at most EVIDENCE_CHARS characters."""
+    text = " ".join(f"{EVIDENCE_KEYS.get(k, k)}={_value(v)}" for k, v in evidence.items() if v not in ({}, [], None))
     return text if len(text) <= EVIDENCE_CHARS else text[: EVIDENCE_CHARS - 1] + "…"
 
 
 def issue_line(issue: dict[str, Any]) -> str:
-    return f"- {issue['code']} {issue['column'] or '(dataset)'}: {short_evidence(issue['evidence'])}"
+    code = ISSUE_CODES.get(issue["code"], issue["code"])
+    return f"- {code} {issue['column'] or '(dataset)'}: {short_evidence(issue['evidence'])}"
 
 
 def _issue_columns(issue: dict[str, Any]) -> list[str]:
@@ -85,17 +118,18 @@ def _issue_columns(issue: dict[str, Any]) -> list[str]:
 
 
 def column_line(p: dict[str, Any], codes: list[str], tag: str | None) -> str:
+    """name | type@conf | missing% | distinct | role | #tag | issue codes (see the legend line)."""
     t = p["type_inference"]
     parts = [
         p["column"],
-        f"{t['dominant_type']}@{t['confidence']:.0%}",
-        f"missing {p['completeness']['empty_or_null_like_share']:.1%}",
-        f"{p['cardinality']['distinct']} distinct",
-        p["cardinality"]["role_hint"],
+        t["dominant_type"] if t["confidence"] >= 1 else f"{t['dominant_type']}@{t['confidence']:.0%}",
+        f"{p['completeness']['empty_or_null_like_share']:.1%}",
+        str(p["cardinality"]["distinct"]),
+        ROLE_CODES.get(p["cardinality"]["role_hint"], p["cardinality"]["role_hint"]),
     ]
     if tag:
-        parts.append(f"tag={tag}")
-    parts.append(",".join(codes) if codes else "clean")
+        parts.append("#" + TAG_CODES.get(tag, tag))
+    parts.append(",".join(ISSUE_CODES.get(c, c) for c in codes) if codes else "clean")
     return "- " + " | ".join(parts)
 
 
@@ -106,18 +140,21 @@ def context_lines(context: dict[str, Any] | None) -> list[str]:
         label = "human"
     else:
         label = "inferred, approved" if context["approved"] else "inferred, UNAPPROVED - verify before relying on it"
-    return [f"Context ({label}):", *(f"  {line}" for line in context["text"].splitlines() if line.strip())]
+    return [f"Context ({label}):", *(f"  {line.strip()}" for line in context["text"].splitlines() if line.strip())]
 
 
 def header_lines(inputs: CardInputs) -> list[str]:
     s = inputs.summary
     partial = s.get("partial_rows", {}).get("count", 0)
+    prof = inputs.profiler or {}
     return [
-        f"# Dataset card: {inputs.source_file} (run {inputs.run_id})",
-        (f"Rows: {s['rows_ok']} ok, {s['rows_malformed']} malformed | duplicates: {s['exact_duplicate_rows']} exact,"
-        f" {s['near_duplicate_rows']} near | {partial} partial rows | {s['columns']} columns |"
-        f" {len(inputs.issues)} issues"),
-        "Details on demand: get_column_profile(name), list_issues(severity=...)",
+        (f"# Dataset card: {inputs.source_file.rsplit('/', 1)[-1]} | run {inputs.run_id[:8]}"
+        f" | profiler {prof.get('version', '?')} config {prof.get('config_hash', '?')}"),
+        (f"Rows: {s['rows_ok']} ok, {s['rows_malformed']} malformed | dups: {s['exact_duplicate_rows']} exact,"
+        f" {s['near_duplicate_rows']} near | {partial} partial | {s['columns']} cols | {len(inputs.issues)} issues"),
+        "Tools: get_column_profile(name), list_issues(severity). Values in <> are masked patterns (A=letters, 9=digits).",
+        ("Columns: name | type(@conf if <100%) | missing | distinct | role | #tag | issues. Issue codes are short"
+         " forms of list_issues names. Evidence: n=count, sh=share, of=compared, ex=examples"),
     ]
 
 
@@ -177,8 +214,15 @@ def _fill(section: _Section, room: int) -> tuple[list[str], int]:
     return lines, 0
 
 
-def build_card(inputs: CardInputs, budget_tokens: int) -> CardResult:
-    """Render the card for `inputs` within `budget_tokens` (pure; same input, same text)."""
+def build_card(inputs: CardInputs, budget_tokens: int, chars_per_token: float | None = None) -> CardResult:
+    """Render the card for `inputs` within `budget_tokens` (pure; same input, same text).
+
+    `chars_per_token` converts the budget to characters (default: the configured estimate).
+    """
+    ratio = chars_per_token or settings.card_chars_per_token
+    policies = column_policies(inputs.columns, inputs.context)
+    inputs = CardInputs(inputs.run_id, inputs.source_file, inputs.context, inputs.profiler, inputs.summary,
+                        [redact_issue(i, policies) for i in inputs.issues], inputs.columns)  # fmt: skip
     draft = (inputs.context or {}).get("draft") or {}
     tags = draft.get("column_tags", {})
     critical = [c for c in draft.get("critical_columns", []) if any(p["column"] == c for p in inputs.columns)]
@@ -202,8 +246,8 @@ def build_card(inputs: CardInputs, budget_tokens: int) -> CardResult:
     if critical_profiles:
         tier0 += ["## Critical columns (from context)", *map(render_column, critical_profiles)]
     sections = [
-        _Section("flagged_columns", "tier1", f"## Flagged columns ({len(flagged)}): name | type@confidence | missing |"
-                 " distinct | role | issues", flagged, render_column, column_pointer("flagged")),
+        _Section("flagged_columns", "tier1", f"## Flagged columns ({len(flagged)})", flagged, render_column,
+                 column_pointer("flagged")),
         _Section("medium_issues", "tier2", f"## Medium issues ({len(by_severity['medium'])})", by_severity["medium"],
                  issue_line, issue_pointer("medium")),
         _Section("low_issues", "tier3", f"## Low issues ({len(by_severity['low'])})", by_severity["low"],
@@ -212,14 +256,14 @@ def build_card(inputs: CardInputs, budget_tokens: int) -> CardResult:
                  column_pointer("clean")),
     ]  # fmt: skip
 
-    budget_chars = budget_tokens * 4
+    budget_chars = int(budget_tokens * ratio)
     lines = list(tier0)
     used = sum(len(line) + 1 for line in lines)
     over_budget = used + sum(s.min_chars() for s in sections) > budget_chars
     if over_budget:
         get_logger("card", run_id=inputs.run_id).warning(
             "tier 0 and pointers exceed the budget; rendering them anyway", budget_tokens=budget_tokens,
-            tier0_tokens=math.ceil(used / 4),
+            tier0_tokens=math.ceil(used / ratio),
         )  # fmt: skip
     compressed: dict[str, int] = {}
     tiers_full = {"tier0": True, "tier1": True, "tier2": True, "tier3": True}
@@ -242,6 +286,8 @@ def build_card(inputs: CardInputs, budget_tokens: int) -> CardResult:
         "budget_tokens": budget_tokens,
         "est_tokens": estimate_tokens(text),
         "chars": len(text),
+        "chars_per_token": round(ratio, 3),
+        "token_basis": "estimate",
         "over_budget": over_budget,
         "tiers_full": tiers_full,
         "compressed_counts": compressed,
@@ -267,30 +313,57 @@ def load_inputs(run_id: uuid.UUID) -> CardInputs:
         (source_file,) = conn.execute(
             "SELECT source_file FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)
         ).fetchone()  # type: ignore[misc]
-    return CardInputs(str(run_id), source_file, get_context(run_id), profile["summary"], profile["issues"],
-                      profile["columns"])  # fmt: skip
+    return CardInputs(str(run_id), source_file, get_context(run_id), profile["summary"].get("profiler"),
+                      profile["summary"], profile["issues"], profile["columns"])  # fmt: skip
+
+
+def build_card_exact(inputs: CardInputs, budget: int, count: Callable[[str], int | None]) -> CardResult:
+    """Budget decisions on exact counts: re-render with the measured chars/token while over budget.
+
+    Every returned card has been counted (unless the counter is unavailable -> estimate).
+    """
+    card = build_card(inputs, budget)
+    for attempt in range(EXACT_ATTEMPTS):
+        exact = count(card.text)
+        if exact is None:
+            return card
+        measured = len(card.text) / exact
+        card.metrics.update({"exact_tokens": exact, "chars_per_token": round(measured, 3), "token_basis": "exact",
+                             "over_budget": exact > budget})  # fmt: skip
+        if exact <= budget or attempt == EXACT_ATTEMPTS - 1:
+            return card
+        card = build_card(inputs, budget, chars_per_token=measured * 0.98)  # small margin: ratios vary by line
+    return card
 
 
 def render_card(run_id: uuid.UUID, budget_tokens: int | None = None, exact: bool = False) -> CardResult:
-    """Render, (optionally) count exact tokens, and store the card. Same text -> same row."""
+    """Render, (optionally) budget on exact tokens, and store the card. Same text -> same row."""
     budget = budget_tokens or settings.card_budget_tokens
-    card = build_card(load_inputs(run_id), budget)
+    inputs = load_inputs(run_id)
     if exact:
-        card.metrics["exact_tokens"] = _exact_tokens(card.text, run_id)
+        card = build_card_exact(inputs, budget, lambda text: _exact_tokens(text, run_id))
+    else:
+        card = build_card(inputs, budget)
     m = card.metrics
     with transaction() as conn:
         conn.execute(
             "INSERT INTO meta.dataset_cards (run_id, card_hash, renderer_version, budget_tokens, est_tokens,"
             " exact_tokens, chars, tiers_full, compressed_counts, columns_total, columns_flagged, issues_total,"
-            " issues_shown, over_budget, card_text) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " issues_shown, over_budget, card_text, chars_per_token, token_basis)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (run_id, card_hash) DO UPDATE SET"
-            " exact_tokens = COALESCE(EXCLUDED.exact_tokens, meta.dataset_cards.exact_tokens)",
+            " exact_tokens = COALESCE(EXCLUDED.exact_tokens, meta.dataset_cards.exact_tokens),"
+            " chars_per_token = CASE WHEN EXCLUDED.exact_tokens IS NOT NULL THEN EXCLUDED.chars_per_token"
+            " ELSE meta.dataset_cards.chars_per_token END,"
+            " token_basis = CASE WHEN EXCLUDED.exact_tokens IS NOT NULL THEN 'exact'"
+            " ELSE meta.dataset_cards.token_basis END, created_at = now()",
             (run_id, card.card_hash, RENDERER_VERSION, budget, m["est_tokens"], m.get("exact_tokens"), m["chars"],
              Jsonb(m["tiers_full"]), Jsonb(m["compressed_counts"]), m["columns_total"], m["columns_flagged"],
-             m["issues_total"], m["issues_shown"], m["over_budget"], card.text),
+             m["issues_total"], m["issues_shown"], m["over_budget"], card.text, m["chars_per_token"], m["token_basis"]),
         )  # fmt: skip
     get_logger("card", run_id=str(run_id)).info(
-        "card stored", card_hash=card.card_hash, est_tokens=m["est_tokens"], budget_tokens=budget,
+        "card stored", card_hash=card.card_hash, est_tokens=m["est_tokens"], exact_tokens=m.get("exact_tokens"),
+        budget_tokens=budget,
         issues_shown=m["issues_shown"], issues_total=m["issues_total"], over_budget=m["over_budget"],
     )  # fmt: skip
     return card

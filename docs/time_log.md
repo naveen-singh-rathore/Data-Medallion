@@ -8,3 +8,4 @@
 | 3b. Profiler v1.1 upgrade | _fill in_ | Audit of items 1–34, central config, sentinels/spikes, normalization variants + typos, hidden chars/mojibake, new date formats, partial rows; 25 new tests |
 | 4. LLM foundation, context, dataset card | _fill in_ | Thin client with cache/replay/record + call log, context (human or one cheap draft), budget-aware card with coverage guarantee, metrics CLI; 18 new tests |
 | 3c. Profiler v1.2 | _fill in_ | DATE_ORDER investigation (real data, not parsing), format-pair evidence, duplicate stats + key-repeat hints, examples on every issue, number kinds, zero_share; 7 new tests |
+| 4b. Step 4 fix-ups | _fill in_ | Exact-token budget, compact card (3,498 → 2,356 tokens), central data minimization, context v2 + human/inferred compare; 13 new/updated tests |

@@ -10,7 +10,7 @@ from typing import Any
 from pipeline.bronze import get_run, ingest_file, recent_runs
 from pipeline.card import render_card
 from pipeline.config import settings
-from pipeline.context import approve_context, ensure_context
+from pipeline.context import approve_context, compare_contexts, ensure_context
 from pipeline.llm import LLMError
 from pipeline.logging_setup import get_logger
 from pipeline.metrics import format_rows, run_metrics
@@ -35,6 +35,8 @@ def _build_parser() -> argparse.ArgumentParser:
     context.add_argument("--run-id", type=uuid.UUID)
     context.add_argument("--context-file", type=Path, help="human-written context (plain text or draft-shaped JSON)")
     context.add_argument("--approve", action="store_true", help="approve the stored (inferred) context")
+    context.add_argument("--redraft", action="store_true", help="draft the inferred context again (LLM call)")
+    context.add_argument("--compare", action="store_true", help="show human vs inferred differences")
     card = sub.add_parser("card", help="render the dataset card within a token budget")
     card.add_argument("--run-id", type=uuid.UUID)
     card.add_argument("--budget", type=int, help=f"token budget (default {settings.card_budget_tokens})")
@@ -126,9 +128,9 @@ def format_context(context: dict[str, Any]) -> str:
     return f"CONTEXT ({context['source']}, {state})\n{body}"
 
 
-def _context(run_id: uuid.UUID, context_file: Path | None) -> None:
+def _context(run_id: uuid.UUID, context_file: Path | None, redraft: bool = False) -> None:
     human = context_file.read_text(encoding="utf-8") if context_file else None
-    print(format_context(ensure_context(run_id, human)))
+    print(format_context(ensure_context(run_id, human, redraft=redraft)))
 
 
 def _card(run_id: uuid.UUID, budget: int | None = None, show: bool = True, exact: bool = False) -> None:
@@ -151,10 +153,12 @@ def main(argv: list[str] | None = None) -> int:
         _profile(args.run_id or latest_succeeded_run())
     elif args.command == "context":
         run_id = args.run_id or latest_succeeded_run()
-        if args.approve and not args.context_file:
-            print("approved" if approve_context(run_id) else "no context stored for this run yet")
+        if args.compare:
+            print("\n".join(compare_contexts(run_id)))
+        elif args.approve and not args.context_file:
+            print("approved" if approve_context(run_id) else "no inferred context stored for this run yet")
         else:
-            _context(run_id, args.context_file)
+            _context(run_id, args.context_file, redraft=args.redraft)
     elif args.command == "card":
         _card(args.run_id or latest_succeeded_run(), args.budget, show=args.show, exact=args.exact)
     elif args.command == "metrics":

@@ -51,6 +51,40 @@ _TODO_
 
 _TODO_
 
+## Metrics (raw_tickets.csv, 10,280 rows × 13 columns)
+
+`python -m pipeline.cli metrics` prints these for any run. Profiler v1.2, card renderer 1.1:
+
+| Metric | Value |
+| --- | --- |
+| Full profile (13 column profiles + summary + issues) | 30.4 KB, ~7,775 tokens (est.) |
+| Dataset card, renderer 1.0 (before compaction) | 6,770 chars, **3,498 exact tokens** |
+| Dataset card, renderer 1.1 | **2,356 exact tokens** (1.79 chars/token), budget 4,000 |
+| Issues shown / total | 32 / 32 (nothing compressed) |
+| Columns flagged / total | 12 / 13 |
+| Context draft v1 call | 1,771 in / 603 out tokens, $0.000479 |
+| Context draft v2 call (minimized prompt) | 2,151 in / 472 out tokens, $0.000451 |
+
+Token budget: estimate = ceil(chars / 2) (`CARD_CHARS_PER_TOKEN`); `card --exact` asks the
+provider and, if the card is over budget, re-renders with the measured ratio. The card is
+dense (numbers, identifiers, punctuation), so chars/4 undercounted it about 2×.
+
+## Business context
+
+The pipeline keeps a human context and an LLM-drafted one side by side; the human one is
+used. `python -m pipeline.cli context --compare` shows where they differ.
+
+**Inferred (claude-haiku-5-5, prompt `context_draft_v2`, unapproved):** *facilities
+maintenance tickets.* "Each row is a facilities service request logged by building occupants
+and routed to internal staff or external vendors for resolution. Operations managers use this
+data to track how quickly issues are resolved against SLA targets, how often requests
+escalate, and what repairs cost across buildings and request categories."
+Critical columns: created_at, resolved_at, category, priority, status, building, cost,
+sla_hours. Tags: submitted_by and assigned_to = person (so they are masked in every LLM input).
+
+**Human (`context/raw_tickets.md`):** _to be added_ - then run
+`context --context-file ../context/raw_tickets.md` and `context --compare`.
+
 ## Scaling to 100x
 
 - **Bronze:** one transaction per run is fine for ~10k rows. For very large files,

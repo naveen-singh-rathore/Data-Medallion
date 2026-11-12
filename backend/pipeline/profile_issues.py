@@ -61,10 +61,10 @@ def column_issues(p: dict[str, Any]) -> list[Issue]:
     name, issues = p["column"], []
     comp, card, shape, types = p["completeness"], p["cardinality"], p["shape"], p["type_inference"]
 
-    if comp["null_like"] or comp["punctuation_only"]:
-        tokens = list(comp["null_like"]) + list(comp["punctuation_examples"])
-        issues.append(_issue(name, "NULL_LIKE_TOKENS", "medium", tokens=comp["null_like"],
-                             punctuation_only=comp["punctuation_only"], examples=tokens[: CFG.examples]))  # fmt: skip
+    if comp["null_like"] or comp["punctuation_only"]:  # examples = {token: count}, punctuation-only included
+        found = {**comp["null_like"], **comp["punctuation_examples"]}
+        issues.append(_issue(name, "NULL_LIKE_TOKENS", "medium", count=sum(comp["null_like"].values())
+                             + comp["punctuation_only"], examples=found))  # fmt: skip
     if comp["empty_or_null_like_share"] > CFG.high_empty_rate:
         severity = "high" if comp["empty_or_null_like_share"] > CFG.very_high_empty_rate else "medium"
         issues.append(_issue(name, "HIGH_EMPTY_RATE", severity, share=comp["empty_or_null_like_share"],

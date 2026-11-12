@@ -1,11 +1,14 @@
 """Business context for a run: written by a human, or drafted by ONE cheap LLM call.
 
-Human context is approved on entry and costs nothing. Otherwise the cheap model sees only
-column names, role hints, dominant types, the row count and 3 sample rows (truncated, with
-PII-hinted columns masked) and returns a structured draft that waits for approval.
+Both can be stored side by side (one row per source); the human row is the one used.
+Human context is approved on entry and costs nothing. Otherwise the cheap model sees
+column names, roles, types and the row count, plus values only for label-like,
+non-sensitive columns (pipeline.privacy); every other column is a pattern + length range.
+The structured draft waits for approval (`context --approve`).
 """
 
 import json
+import re
 import string
 import uuid
 from typing import Any, Literal
@@ -17,13 +20,15 @@ from pipeline.config import settings
 from pipeline.db import transaction
 from pipeline.llm import LLMError, call_llm
 from pipeline.logging_setup import get_logger
-from pipeline.profile_columns import mask
+from pipeline.privacy import column_policies, minimize
+from pipeline.profile_values import is_missing
 from pipeline.profiling import load_profile
 
-PROMPT_VERSION = "context_draft_v1"
+PROMPT_VERSION = "context_draft_v2"
 SAMPLE_ROWS = 3
 SAMPLE_CHARS = 60
-SUMMARY_WORDS = 80
+TOP_VALUES = 5
+SUMMARY_WORDS = 60
 MAX_METRICS = 5
 TAGS = ("id", "timestamp", "category", "status", "priority", "money", "quantity", "duration",
         "free_text", "person", "contact_pii", "location", "other")  # fmt: skip
@@ -72,11 +77,22 @@ def draft_schema(columns: list[str]) -> dict[str, Any]:
     }
 
 
+def fit_summary(text: str, limit: int = SUMMARY_WORDS) -> str | None:
+    """The longest run of whole sentences within `limit` words; None if even the first is too long."""
+    kept: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if len(" ".join([*kept, sentence]).split()) > limit:
+            break
+        kept.append(sentence)
+    return " ".join(kept) or None
+
+
 def validate_draft(raw: Any, columns: list[str]) -> dict[str, Any]:
     """Pydantic-validate the model output, drop unknown columns, enforce the size limits.
 
     Returns the stored draft: column_tags as {column: tag}, plus `rejected_columns` and
-    `repairs` so nothing the profiler dropped goes unnoticed.
+    `repairs` so nothing that was changed goes unnoticed. A summary over the word limit is
+    cut at the last full sentence; if no sentence fits, `summary` is None (caller retries).
     """
     try:
         draft = ContextDraft.model_validate(raw)
@@ -86,16 +102,19 @@ def validate_draft(raw: Any, columns: list[str]) -> dict[str, Any]:
     rejected = sorted({c for c in draft.critical_columns if c not in known}
                       | {t.column for t in draft.column_tags if t.column not in known})  # fmt: skip
     repairs = []
-    words = draft.summary.split()
-    if len(words) > SUMMARY_WORDS:
-        repairs.append(f"summary cut from {len(words)} to {SUMMARY_WORDS} words")
+    words = len(draft.summary.split())
+    summary: str | None = draft.summary.strip()
+    if words > SUMMARY_WORDS:
+        summary = fit_summary(draft.summary)
+        if summary:
+            repairs.append(f"summary cut from {words} to {len(summary.split())} words at a sentence end")
     if len(draft.likely_metrics) > MAX_METRICS:
         repairs.append(f"likely_metrics cut from {len(draft.likely_metrics)} to {MAX_METRICS}")
     critical = [c for c in dict.fromkeys(draft.critical_columns) if c in known]
     tags = {t.column: t.tag for t in draft.column_tags if t.column in known}
     return {
         "domain": draft.domain.strip(),
-        "summary": " ".join(words[:SUMMARY_WORDS]),
+        "summary": summary,
         "likely_metrics": draft.likely_metrics[:MAX_METRICS],
         "critical_columns": critical,
         "column_tags": {c: tags[c] for c in columns if c in tags},  # header order
@@ -105,23 +124,28 @@ def validate_draft(raw: Any, columns: list[str]) -> dict[str, Any]:
 
 
 def render_text(draft: dict[str, Any]) -> str:
-    metrics = "; ".join(draft["likely_metrics"]) or "-"
-    critical = ", ".join(draft["critical_columns"]) or "-"
-    return f"{draft['domain']}. {draft['summary']}\nLikely metrics: {metrics}\nCritical columns: {critical}"
+    """Prose shown on the card: domain, summary, metrics (critical columns have their own section)."""
+    lines = [f"{draft['domain']}. {draft.get('summary') or ''}".strip()]
+    if draft.get("likely_metrics"):
+        lines.append("Likely metrics: " + "; ".join(draft["likely_metrics"]))
+    return "\n".join(lines)
 
 
-# --- prompt inputs -----------------------------------------------------------------
+# --- prompt inputs (minimized) -------------------------------------------------------
 
 
-def _pii_columns(profiles: list[dict[str, Any]]) -> set[str]:
-    return {
-        p["column"] for p in profiles
-        if p["pii_hints"]["email_share"] or p["pii_hints"]["phone_share"] or p["pii_hints"]["name_matches"]
-    }  # fmt: skip
+def _column_line(p: dict[str, Any], policy: str) -> str:
+    head = f"- {p['column']} | {p['cardinality']['role_hint']} | {p['type_inference']['dominant_type']}"
+    if policy == "raw":
+        values = [v for v, _ in p["frequency"]["top_values"] if not is_missing(v)][:TOP_VALUES]
+        return f"{head} | values: " + ", ".join(json.dumps(v[:SAMPLE_CHARS], ensure_ascii=False) for v in values)
+    shape = p["shape"]
+    masks = [m for m, _ in p["patterns"]["top_masks"][:2]]
+    return f"{head} | pattern: {' or '.join(masks) or '-'} (length {shape['min_length']}-{shape['max_length']})"
 
 
-def sample_rows(run_id: uuid.UUID, columns: list[str], pii: set[str]) -> list[dict[str, str]]:
-    """3 deterministic ok rows (ordered by a hash, not file position); PII columns masked to patterns."""
+def sample_rows(run_id: uuid.UUID, columns: list[str], policies: dict[str, str]) -> list[dict[str, str]]:
+    """3 deterministic ok rows (ordered by a hash, not file position), minimized per column."""
     with transaction() as conn:
         rows = conn.execute(
             "SELECT payload FROM bronze.records WHERE run_id = %s AND parse_status = 'ok'"
@@ -131,7 +155,7 @@ def sample_rows(run_id: uuid.UUID, columns: list[str], pii: set[str]) -> list[di
 
     def show(column: str, value: Any) -> str:
         text = "" if value is None else str(value)[:SAMPLE_CHARS]
-        return f"<masked: {mask(text)}>" if column in pii and text.strip() else text
+        return minimize(text, policies[column])
 
     return [{c: show(c, payload.get(c)) for c in columns} for (payload,) in rows]
 
@@ -143,36 +167,70 @@ def load_prompt(version: str) -> tuple[str, string.Template]:
 
 
 def build_messages(run_id: uuid.UUID) -> tuple[str, list[dict[str, Any]], list[str]]:
-    """System prompt, messages and the run's column names, from the stored profile only."""
+    """System prompt, messages and column names. Uses any stored context's tags for masking."""
     profile = load_profile(run_id)
     profiles = profile["columns"]
     columns = [p["column"] for p in profiles]
-    lines = [
-        f"- {p['column']} | {p['cardinality']['role_hint']} | {p['type_inference']['dominant_type']}"
-        for p in profiles
-    ]
-    samples = sample_rows(run_id, columns, _pii_columns(profiles))
+    policies = column_policies(profiles, get_context(run_id))
     system, template = load_prompt(PROMPT_VERSION)
     user = template.substitute(
         row_count=profile["summary"]["rows_ok"],
         column_count=len(columns),
-        columns="\n".join(lines),
-        samples="\n".join(json.dumps(row, ensure_ascii=False) for row in samples),
+        columns="\n".join(_column_line(p, policies[p["column"]]) for p in profiles),
+        samples="\n".join(json.dumps(row, ensure_ascii=False) for row in sample_rows(run_id, columns, policies)),
     )
     return system, [{"role": "user", "content": user}], columns
 
 
+# --- human context file ---------------------------------------------------------------
+
+_LABEL = re.compile(r"^\s*(domain|critical columns|tags)\s*:\s*(.*)$", re.IGNORECASE)
+
+
+def parse_human(text: str, columns: list[str]) -> dict[str, Any] | None:
+    """Optional structure in a human file: JSON in the draft shape, or `Domain:`,
+    `Critical columns: a, b` and `Tags: col=tag, ...` lines among free text."""
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        raw = None
+    if isinstance(raw, dict):
+        if isinstance(raw.get("column_tags"), dict):
+            raw = raw | {"column_tags": [{"column": c, "tag": t} for c, t in raw["column_tags"].items()]}
+        return validate_draft(raw, columns)
+    fields: dict[str, str] = {}
+    prose = []
+    for line in text.splitlines():
+        if match := _LABEL.match(line):
+            fields[match.group(1).lower()] = match.group(2).strip()
+        elif line.strip() and not line.lstrip().startswith("#"):
+            prose.append(line.strip())
+    if not fields:
+        return None
+    split = [s.strip() for s in fields.get("critical columns", "").split(",") if s.strip()]
+    tag_pairs = [t.split("=", 1) for t in fields.get("tags", "").split(",") if "=" in t]
+    draft = validate_draft({"domain": fields.get("domain", ""), "summary": " ".join(prose), "likely_metrics": [],
+                            "critical_columns": split,
+                            "column_tags": [{"column": c.strip(), "tag": t.strip()} for c, t in tag_pairs]},
+                           columns)  # fmt: skip
+    draft["summary"] = " ".join(prose)  # a human's words are not cut
+    return draft
+
+
 # --- storage + entry point ----------------------------------------------------------
 
+_FIELDS = ("text", "draft", "source", "approved", "llm_call_id")
 
-def get_context(run_id: uuid.UUID) -> dict[str, Any] | None:
+
+def get_context(run_id: uuid.UUID, source: str | None = None) -> dict[str, Any] | None:
+    """The context to use (human over inferred), or the row for one `source`."""
     with transaction() as conn:
         row = conn.execute(
-            "SELECT text, draft, source, approved, llm_call_id FROM meta.dataset_context WHERE run_id = %s", (run_id,)
+            f"SELECT {', '.join(_FIELDS)} FROM meta.dataset_context WHERE run_id = %s"
+            " AND (%s::text IS NULL OR source = %s) ORDER BY source = 'human' DESC LIMIT 1",
+            (run_id, source, source),
         ).fetchone()
-    if not row:
-        return None
-    return dict(zip(("text", "draft", "source", "approved", "llm_call_id"), row, strict=True))
+    return dict(zip(_FIELDS, row, strict=True)) if row else None
 
 
 def _save(run_id: uuid.UUID, text: str, draft: dict[str, Any] | None, source: str, approved: bool,
@@ -181,47 +239,83 @@ def _save(run_id: uuid.UUID, text: str, draft: dict[str, Any] | None, source: st
         conn.execute(
             "INSERT INTO meta.dataset_context (run_id, text, draft, source, approved, llm_call_id)"
             " VALUES (%s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT (run_id) DO UPDATE SET text = EXCLUDED.text, draft = EXCLUDED.draft,"
-            " source = EXCLUDED.source, approved = EXCLUDED.approved, llm_call_id = EXCLUDED.llm_call_id,"
-            " created_at = now()",
+            " ON CONFLICT (run_id, source) DO UPDATE SET text = EXCLUDED.text, draft = EXCLUDED.draft,"
+            " approved = EXCLUDED.approved, llm_call_id = EXCLUDED.llm_call_id, created_at = now()",
             (run_id, text, Jsonb(draft) if draft is not None else None, source, approved, llm_call_id),
         )
 
 
-def _human_draft(text: str, columns: list[str]) -> dict[str, Any] | None:
-    """A human file may also be JSON in the draft shape; then it gets the same validation."""
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(raw, dict) and isinstance(raw.get("column_tags"), dict):
-        raw = raw | {"column_tags": [{"column": c, "tag": t} for c, t in raw["column_tags"].items()]}
-    return validate_draft(raw, columns)
+def _draft_with_llm(run_id: uuid.UUID, client: Any) -> tuple[dict[str, Any], uuid.UUID]:
+    """One cheap-model call; if no whole sentence of the summary fits, retry once with a reminder."""
+    system, messages, columns = build_messages(run_id)
+    schema = draft_schema(columns)
+
+    def ask(msgs: list[dict[str, Any]]) -> Any:
+        return call_llm("context_draft", settings.cheap_model, msgs, PROMPT_VERSION, run_id, json_schema=schema,
+                        system=system, effort="low", client=client)  # fmt: skip
+
+    result = ask(messages)
+    draft = validate_draft(result.data, columns)
+    if draft["summary"] is None:
+        words = len(result.data["summary"].split())
+        retry = [*messages, {"role": "assistant", "content": result.text},
+                 {"role": "user", "content": f"The summary has {words} words. Return the same JSON with a summary "
+                  f"of at most {SUMMARY_WORDS} words in complete sentences."}]  # fmt: skip
+        result = ask(retry)
+        draft = validate_draft(result.data, columns)
+        draft["repairs"].append("summary too long: retried once")
+        if draft["summary"] is None:  # still no whole sentence fits: last resort, cut words
+            draft["summary"] = " ".join(result.data["summary"].split()[:SUMMARY_WORDS]) + " …"
+            draft["repairs"].append("summary cut mid-sentence after retry")
+    return draft, result.call_id
 
 
-def ensure_context(run_id: uuid.UUID, human_text: str | None = None, client: Any = None) -> dict[str, Any]:
-    """Human text -> stored as approved (no LLM call). Otherwise reuse a stored context, or draft one."""
+def ensure_context(
+    run_id: uuid.UUID, human_text: str | None = None, client: Any = None, redraft: bool = False
+) -> dict[str, Any]:
+    """Human text -> stored as approved (no LLM call; an inferred draft is kept for comparison).
+    Otherwise reuse a stored context, or draft one (`redraft=True` replaces the inferred row)."""
     log = get_logger("context", run_id=str(run_id))
     if human_text is not None:
         columns = [p["column"] for p in load_profile(run_id)["columns"]]
-        draft = _human_draft(human_text, columns)
-        _save(run_id, render_text(draft) if draft else human_text.strip(), draft, "human", True, None)
+        draft = parse_human(human_text, columns)
+        _save(run_id, human_text.strip(), draft, "human", True, None)
         log.info("context stored", source="human", structured=draft is not None)
         return get_context(run_id)  # type: ignore[return-value]
-    if existing := get_context(run_id):
+    if not redraft and (existing := get_context(run_id)):
         return existing
-    system, messages, columns = build_messages(run_id)
-    result = call_llm("context_draft", settings.cheap_model, messages, PROMPT_VERSION, run_id,
-                      json_schema=draft_schema(columns), system=system, effort="low", client=client)  # fmt: skip
-    draft = validate_draft(result.data, columns)
+    draft, call_id = _draft_with_llm(run_id, client)
     if draft["rejected_columns"] or draft["repairs"]:
         log.warning("context draft repaired", rejected=draft["rejected_columns"], repairs=draft["repairs"])
-    _save(run_id, render_text(draft), draft, "inferred", False, result.call_id)
-    log.info("context stored", source="inferred", cost_usd=str(result.cost_usd), cache_hit=result.cache_hit)
+    _save(run_id, render_text(draft), draft, "inferred", False, call_id)
+    log.info("context stored", source="inferred")
     return get_context(run_id)  # type: ignore[return-value]
 
 
 def approve_context(run_id: uuid.UUID) -> bool:
     with transaction() as conn:
-        updated = conn.execute("UPDATE meta.dataset_context SET approved = true WHERE run_id = %s", (run_id,)).rowcount
+        updated = conn.execute(
+            "UPDATE meta.dataset_context SET approved = true WHERE run_id = %s AND source = 'inferred'", (run_id,)
+        ).rowcount
     return bool(updated)
+
+
+def compare_contexts(run_id: uuid.UUID) -> list[str]:
+    """Human vs inferred: domain, critical columns and tag differences, as printable lines."""
+    human, inferred = get_context(run_id, "human"), get_context(run_id, "inferred")
+    if not human or not inferred:
+        return [f"need both contexts to compare (human: {'yes' if human else 'no'}, inferred: {'yes' if inferred else 'no'})"]
+    h, i = human["draft"] or {}, inferred["draft"] or {}
+    hc, ic = h.get("critical_columns", []), i.get("critical_columns", [])
+    ht, it = h.get("column_tags", {}), i.get("column_tags", {})
+    lines = [f"domain      human: {h.get('domain') or '(not given)'}", f"            inferred: {i.get('domain')}",
+             f"critical    both: {', '.join(c for c in hc if c in ic) or '-'}",
+             f"            human only: {', '.join(c for c in hc if c not in ic) or '-'}",
+             f"            inferred only: {', '.join(c for c in ic if c not in hc) or '-'}"]  # fmt: skip
+    differing = [f"{c}: human={ht.get(c, '-')} inferred={it.get(c, '-')}" for c in dict.fromkeys([*ht, *it])
+                 if ht.get(c) != it.get(c) and c in ht]  # fmt: skip
+    lines.append("tags        " + ("; ".join(differing) if differing else
+                                   ("same where both tag a column" if ht else "(human gave no tags)")))  # fmt: skip
+    if ht:
+        lines.append(f"            tagged by inferred only: {', '.join(c for c in it if c not in ht) or '-'}")
+    return lines

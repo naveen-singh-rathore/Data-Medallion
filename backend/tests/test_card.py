@@ -5,7 +5,13 @@ import re
 import pytest
 
 from pipeline import cli
-from pipeline.card import CardInputs, build_card, estimate_tokens, render_card
+from pipeline.card import (
+    CardInputs,
+    build_card,
+    build_card_exact,
+    estimate_tokens,
+    render_card,
+)
 
 SEVERITIES = ("high", "medium", "low")
 
@@ -13,9 +19,10 @@ SEVERITIES = ("high", "medium", "low")
 def column(name: str, distinct: int = 10) -> dict:
     return {
         "column": name,
-        "type_inference": {"dominant_type": "text", "confidence": 1.0},
+        "type_inference": {"dominant_type": "text", "confidence": 1.0, "boolean_candidate": False},
         "completeness": {"empty_or_null_like_share": 0.05},
-        "cardinality": {"distinct": distinct, "role_hint": "categorical"},
+        "cardinality": {"distinct": distinct, "distinct_ratio": 0.01, "role_hint": "categorical"},
+        "pii_hints": {"email_share": 0.0, "phone_share": 0.0, "name_matches": []},
     }
 
 
@@ -31,7 +38,8 @@ def synthetic(n_columns: int, issue_every: int = 2) -> CardInputs:
                "partial_rows": {"count": 3}, "columns": n_columns}  # fmt: skip
     context = {"source": "inferred", "approved": False, "text": "Synthetic data.",
                "draft": {"critical_columns": [names[1]], "column_tags": {names[1]: "id"}}}  # fmt: skip
-    return CardInputs("run-x", "synthetic.csv", context, summary, issues, [column(n) for n in names])
+    profiler = {"version": "1.2", "config_hash": "abc123def456"}
+    return CardInputs("run-x", "synthetic.csv", context, profiler, summary, issues, [column(n) for n in names])
 
 
 def pointer_counts(text: str) -> dict[str, int]:
@@ -55,7 +63,7 @@ def test_card_is_deterministic() -> None:
     assert (first.text, first.card_hash) == (second.text, second.card_hash)
 
 
-@pytest.mark.parametrize("budget", [700, 900, 1500, 4000])  # tier 0 alone is ~541 tokens
+@pytest.mark.parametrize("budget", [1500, 1800, 3000, 8000])  # tier 0 alone is ~1,100 tokens at chars/2
 def test_budget_respected_and_coverage_holds(budget: int) -> None:
     inputs = synthetic(40)
     card = build_card(inputs, budget)
@@ -69,7 +77,7 @@ def test_budget_respected_and_coverage_holds(budget: int) -> None:
 
 def test_tiny_budget_keeps_tier0_and_counts_everything() -> None:
     inputs = synthetic(40)
-    card = build_card(inputs, 50)
+    card = build_card(inputs, 100)
     assert card.metrics["over_budget"]
     high = [i for i in inputs.issues if i["severity"] == "high"]
     assert all(f"- HIGH_CODE {i['column']}:" in card.text for i in high)  # Tier 0 never dropped
@@ -108,3 +116,38 @@ def test_run_all_ingests_profiles_adds_context_and_renders_card(ingest, conn, tm
     assert (context["source"], context["approved"]) == ("human", True)
     assert conn.execute("SELECT count(*) AS n FROM meta.dataset_cards WHERE run_id = %s", (latest,)).fetchone()["n"] == 1
     assert "Context (human):" in capsys.readouterr().out
+
+
+def test_estimate_is_chars_over_two() -> None:
+    assert estimate_tokens("x" * 101) == 51
+    card = build_card(synthetic(10), 4000)
+    assert card.metrics["chars_per_token"] == 2.0 and card.metrics["token_basis"] == "estimate"
+
+
+def test_exact_counts_drive_the_budget() -> None:
+    """A counter that sees 1 token per char: the first render (chars/2) is over, the re-render fits."""
+    inputs = synthetic(40)
+    card = build_card_exact(inputs, 4000, count=len)  # tier 0 is ~2,250 chars
+    m = card.metrics
+    assert m["token_basis"] == "exact" and m["exact_tokens"] == len(card.text) <= 4000
+    assert m["chars_per_token"] == 1.0 and not m["over_budget"]
+    assert_full_coverage(inputs, card.text)
+    assert build_card_exact(inputs, 4000, count=lambda text: None).metrics["token_basis"] == "estimate"
+
+
+def test_card_masks_sensitive_and_high_cardinality_values_but_keeps_vocabulary() -> None:
+    inputs = synthetic(4)
+    people = inputs.columns[2] | {"column": "owner"}
+    free_text = inputs.columns[3] | {"column": "notes", "cardinality": {"distinct": 900, "distinct_ratio": 0.9,
+                                                                        "role_hint": "free_text"}}  # fmt: skip
+    issues = [
+        {"column": "owner", "code": "NORMALIZATION_VARIANTS", "severity": "medium",
+         "evidence": {"groups": 1, "examples": [[["Jane Doe", 3], ["jane doe", 2]]]}},
+        {"column": "notes", "code": "NUMBERS_IN_TEXT", "severity": "medium",
+         "evidence": {"count": 2, "kinds": [["currency_prefix", 2]], "examples": ["paid $40 cash", "n/a"]}},
+    ]  # fmt: skip
+    context = {"source": "inferred", "approved": True, "text": "x", "draft": {"column_tags": {"owner": "person"}}}
+    card = build_card(CardInputs("run-x", "f.csv", context, None, inputs.summary, issues,
+                                 [inputs.columns[0], people, free_text]), 4000).text  # fmt: skip
+    assert "Jane" not in card and "jane" not in card and "paid $40" not in card
+    assert "<A A>" in card and "currency_prefix" in card and "n/a" in card
