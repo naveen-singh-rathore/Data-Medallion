@@ -1,52 +1,78 @@
 # Data Medallion
 
-## Local database
+## Overview
 
-The local PostgreSQL 16 database uses the `pgvector/pgvector` image and persists
-its data in a named Docker volume. The checked-in `.env.example` contains local
-development defaults; `.env` is ignored by Git.
+_TODO_
 
-1. Copy `.env.example` to `.env` if you do not already have a local `.env`.
-2. Start the database and wait for its health check:
+## Architecture
 
-   ```sh
-   make db-up
-   docker compose ps
-   ```
+_TODO_
 
-3. Install the Python dependencies and apply migrations:
+## How to run
 
-   ```sh
-   pip install -r requirements.txt
-   make migrate
-   ```
+_TODO_
 
-   Alembic is initialized with an empty metadata baseline; no application
-   tables are defined yet. Create a migration after defining models with
-   `make makemigration name=describe_change`.
+## Bronze
 
-Useful database commands:
+`python -m pipeline.cli ingest <file.csv> [--force]` loads any CSV into `bronze.records`
+without needing to know its columns. `python -m pipeline.cli runs` lists past runs.
 
-| Command | Action |
-| --- | --- |
-| `make db-up` | Start PostgreSQL in the background |
-| `make db-down` | Stop the database without removing its data |
-| `make db-reset` | Stop the database and **delete its data volume** |
-| `make db-logs` | Follow database logs |
-| `make db-shell` | Open `psql` inside the database container |
-| `make migrate` | Apply Alembic migrations |
+- **Faithful, schema-on-read:** each record keeps its exact text (`raw_line`) and a
+  `payload` JSONB of `{column: raw string}`. Nothing is trimmed, cast or nulled.
+  Header names that are empty or repeated are renamed (`column_<n>`, `<name>_2`);
+  the original header is stored on the run.
+- **Malformed rows are kept, not dropped:** too many fields (extras go in
+  `_extra_fields`), too few fields, blank lines and unclosed quotes are loaded with
+  `parse_status = 'malformed'` and an exact `parse_error`.
+- **Lineage:** every row records its `run_id`, `source_file`, `source_line` (where the
+  record starts), `batch_no` and `ingested_at`. `row_hash` = sha256 of `raw_line`.
+- **Idempotent:** a file is identified by its sha256. Re-ingesting an
+  already-loaded file is skipped. `--force`, or a previously failed run, replaces the
+  old run. Repeated rows inside one file are kept; deduplication is silver's job.
+- **Batched and atomic:** one transaction per run, with a savepoint per batch
+  (`BATCH_SIZE`, default 1000). Each batch is loaded with COPY. If that fails, the
+  batch is retried row by row, and rows the database refuses go to
+  `bronze.load_errors`. The `running` run row is committed first, so a failed load
+  stays visible as `failed`.
+- **Reconciliation funnel** (`meta.ingestion_runs`, per batch in
+  `meta.ingestion_batches`): physical lines → records parsed → loaded ok + loaded
+  malformed + load failed. The three must add up to records parsed (checked in memory
+  and in the DB) or the run fails.
 
-The `db-reset` command is destructive. Run `make db-up` again afterward to
-create a fresh database.
+## Silver
 
-### DBeaver connection
+_TODO_
 
-- Database type: PostgreSQL
-- Host: `localhost`
-- Port: `5432` (or the value of `POSTGRES_PORT` in `.env`)
-- Database: `appdb`
-- Username: `dev`
-- Password: `dev`
+## Gold
 
-The database initializes the `vector` and `uuid-ossp` extensions on its first
-startup.
+_TODO_
+
+## Agents (assessment)
+
+_TODO_
+
+## Scaling to 100x
+
+- **Bronze:** one transaction per run is fine for ~10k rows. For very large files,
+  commit per batch and keep a resume checkpoint (`last_committed_line` on the run), so
+  a crashed load resumes from where it stopped instead of restarting. Memory already
+  stays flat, because records are streamed by a generator.
+- **Profiling:** compute counts with SQL aggregates in Postgres (completeness,
+  distinct counts, top values and duplicate hashes, via `GROUP BY` on
+  `payload->>col`), so no rows are pulled into Python. Run the per-value regex work
+  (pattern masks, type and date detection) on a fixed-size, seeded sample of about
+  50k rows per column, and report shares from the sample. Profile size stays the
+  same, because it grows with the number of columns, not rows. At 10M rows the
+  slow parts today would be loading every row into a DataFrame (memory), the
+  per-value Python loops (date parsing, type regexes, hidden-character scans), and
+  the partial-row and near-duplicate passes over the whole frame; distinct counts
+  and top values would move to streaming sketches (HyperLogLog, count-min,
+  t-digest).
+
+## Tradeoffs
+
+_TODO_
+
+## Decisions
+
+See [docs/decisions.md](docs/decisions.md).

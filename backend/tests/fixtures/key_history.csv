@@ -1,0 +1,11 @@
+id,state,updated_at,amount,note
+T-01,Open,2024-01-01,10,first
+T-01,Closed,2024-01-05,10,first
+T-02,Open,2024-01-02,20,second
+T-03,Open,2024-01-03,30,third
+T-04,Closed,2024-01-04,40,fourth
+T-05,Open,2024-01-05,50,fifth
+T-06,Open,2024-01-06,60,sixth
+T-07,Closed,2024-01-07,70,seventh
+T-08,Open,2024-01-08,0,eighth
+T-09,Open,2024-01-09,0,ninth

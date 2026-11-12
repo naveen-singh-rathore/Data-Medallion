@@ -1,25 +1,25 @@
-.PHONY: db-up db-down db-reset db-logs db-shell migrate makemigration
+.PHONY: venv up down init-db test lint psql
 
-PYTHON ?= python
+PYTHON ?= $(CURDIR)/.venv/bin/python
 
-db-up:
-	docker compose up -d
+venv:
+	python3.12 -m venv .venv
+	$(PYTHON) -m pip install -q -r backend/requirements.txt
 
-db-down:
+up:
+	docker compose up -d --wait
+
+down:
 	docker compose down
 
-db-reset:
-	docker compose down -v
+init-db:
+	cd backend && $(PYTHON) -m pipeline.cli init-db
 
-db-logs:
-	docker compose logs -f db
+test:
+	cd backend && $(PYTHON) -m pytest -q
 
-db-shell:
+lint:
+	$(PYTHON) -m ruff check backend
+
+psql:
 	docker compose exec db sh -c 'exec psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
-
-migrate:
-	$(PYTHON) -m alembic upgrade head
-
-makemigration:
-	@test -n "$(name)" || (echo "Usage: make makemigration name=describe_change"; exit 1)
-	$(PYTHON) -m alembic revision --autogenerate -m "$(name)"
