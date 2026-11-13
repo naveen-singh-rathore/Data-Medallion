@@ -21,7 +21,7 @@ from pipeline.silver.defaults import default_rules
 from pipeline.silver.rules_schema import from_yaml, to_yaml
 from pipeline.silver.validator import validate_rules
 
-STUB_COMMANDS = ["build-gold"]
+STUB_COMMANDS: list[str] = []
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -70,6 +70,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("dq-graph", help="write docs/dq_agent_graph.md (mermaid)")
     silver = sub.add_parser("build-silver", help="apply the approved rules and store the silver table")
     silver.add_argument("--run-id", type=uuid.UUID)
+    gold = sub.add_parser("build-gold", help="build the gold tables from the current silver build")
+    gold.add_argument("--run-id", type=uuid.UUID)
     cls = sub.add_parser("classify-category", help="AI label for rows the rules could not standardise (cached)")
     cls.add_argument("--run-id", type=uuid.UUID)
     cls.add_argument("--mode", choices=["live", "replay", "record"], help="LLM mode for this command (default: .env)")
@@ -240,6 +242,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"silver build {b['build_id']} -> {b['target_table']} ({b['duration_ms']} ms)\n"
               f"  rows in {b['rows_in']}: kept {b['rows_kept']}, flagged {b['rows_flagged']}, "
               f"rejected {b['rows_rejected']}, duplicate {b['rows_duplicate']}  reconciliation ✓")
+    elif args.command == "build-gold":
+        from pipeline.gold.build import build_gold
+
+        g = build_gold(args.run_id or latest_succeeded_run())
+        print(f"gold build {g['build_id']} ({g['duration_ms']} ms) from silver build {g['silver_build_id']}")
+        print("  rows: " + ", ".join(f"{k} {v}" for k, v in g["row_counts"].items()))
+        for name, c in g["checks"].items():
+            print(f"  {'✓' if c['ok'] else '✗'} {name}: {c['actual']}")
     elif args.command in ("classify-category", "category-eval-sheet", "category-eval"):
         from pipeline.silver import classify
 

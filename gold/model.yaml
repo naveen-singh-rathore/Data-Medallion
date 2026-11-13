@@ -1,0 +1,21 @@
+# Gold business model for ticket-like data. pipeline/gold/build.py resolves each role to a silver
+# column from the business-context tags (id, category, priority, status, location, money, duration)
+# and the approved date_order row check (a = opened, b = closed). Uncomment a role to override it.
+roles: {}
+#  id: ticket_id
+#  opened: created_at
+#  closed: resolved_at
+#  category: category
+#  priority: priority
+#  status: status
+#  location: building
+#  money: cost
+#  sla: sla_hours
+
+# Status values (as they are in silver, after cleaning) that mean the ticket is finished.
+resolved_statuses: [resolved, closed]
+# Status values that clearly mean "escalated". escalation_rate is only built when one of these occurs
+# in the data. It is a snapshot: the CURRENT status (no status history in the source).
+escalated_statuses: [escalated]
+# Below this confidence an AI category is not used (matches pipeline/silver/classify.py).
+ai_min_confidence: 0.6

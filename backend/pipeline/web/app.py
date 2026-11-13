@@ -326,6 +326,16 @@ def silver_build(run_id: uuid.UUID) -> dict[str, Any]:
     return _busy(lambda: jobs.start_build(run_id))
 
 
+@app.get("/api/runs/{run_id}/gold")
+def gold(run_id: uuid.UUID) -> dict[str, Any]:
+    return _found(views.gold_view(run_id), "gold not built yet")
+
+
+@app.post("/api/runs/{run_id}/gold/build")
+def gold_build(run_id: uuid.UUID) -> dict[str, Any]:
+    return _busy(lambda: jobs.start_gold(run_id))
+
+
 @app.get("/api/runs/{run_id}/silver")
 def silver(run_id: uuid.UUID) -> dict[str, Any]:
     return _found(views.silver_summary(run_id), "no rules to preview yet")

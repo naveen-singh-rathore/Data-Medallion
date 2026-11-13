@@ -76,7 +76,8 @@ const STEP_COPY = {
     "Approve or reject each rule on its own. When all are decided, finish the review to use them for the cleaned data."],
   silver: ["Silver is your data after the approved rules are applied and stored as a table: one date format, placeholders emptied, spellings merged, numbers made numeric. It is built automatically when you finish the review.",
     "Every value keeps a link to its original, and every fix is labelled, so you can filter on what was changed instead of trusting it blindly."],
-  gold: ["Gold will hold business-ready tables and metrics built from Silver.", "This layer is not built yet in this pipeline."],
+  gold: ["Gold turns the cleaned tickets into business tables: resolution time and SLA, volume and backlog, and repair cost. It is built automatically after the cleaned table.",
+    "Every number shows how much of the data it is based on, and the findings at the top say what limits the numbers and what to do about it."],
 };
 
 // --- routing ------------------------------------------------------------------------------
@@ -861,12 +862,86 @@ function silverCell(c) {
   return h`<td class="cell ${c.change === "fixed" ? "changed" : ""}" title="${c.flags.join(", ") || "format unified"}"><span class="before">${c.before === null || c.before === "" ? "(empty)" : c.before}</span><span class="after ${c.change}">${after}</span></td>`;
 }
 
-PANELS.gold = async (ov) => {
-  const c = await api(`/runs/${ov.run_id}/context`).catch(() => ({}));
-  const metrics = (c.used && c.used.draft && c.used.draft.likely_metrics) || [];
-  return h`<div class="callout">Gold is the next layer to be built. It will turn the cleaned Silver rows into tables and metrics people report on.</div>
-    ${metrics.length ? h`<div class="stack-sm"><h4>Metrics the business context says this data should feed</h4><div class="chips">${metrics.map((m) => h`<span class="chip">${m}</span>`)}</div></div>` : ""}`;
+const hrs = (h) => (h == null ? "–" : Math.abs(h) < 48 ? `${Number(h).toFixed(1)} h` : `${(h / 24).toFixed(0)} days`);
+const rate = (n, d) => (d ? pct(n / d) : "–");
+
+PANELS.gold = async (ov, stage) => {
+  let g;
+  try { g = await api(`/runs/${ov.run_id}/gold`); } catch (e) {
+    if (e.status !== 404) throw e;
+    return h`<div class="callout row between"><span>The business tables are not built yet. They are built from the stored cleaned table.</span>
+      ${stage.state === "action" ? h`<button class="btn primary" data-act="buildgold">Build the business tables</button>` : ""}</div>`;
+  }
+  const b = g.build;
+  const checks = Object.entries(b.checks || {});
+  const head = h`<div class="callout ${g.current ? "ok" : b.status === "failed" ? "bad" : "warn"} small row between">
+    <span>${g.current ? h`<b>✓ Built ${when(b.started_at)}</b> in ${dur(b.duration_ms)} from the current cleaned table.`
+      : b.status === "failed" ? h`<b>The last build failed:</b> ${b.error_message}. Showing the previous build.`
+      : h`<b>The cleaned table changed since these tables were built.</b> Rebuild to update them.`}
+      ${checks.length ? h` Reconciliation: ${checks.filter(([, c]) => c.ok).length}/${checks.length} checks passed.` : ""}</span>
+    <button class="btn small ${g.current ? "" : "primary"}" data-act="buildgold">${g.current ? "Rebuild" : "Build now"}</button></div>`;
+  if (!g.kpis) return h`${head}${g.note ? h`<p class="muted">${g.note}</p>` : ""}`;
+  const k = g.kpis;
+  const datesBad = g.findings.find((f) => f.finding === "resolution_dates_unreliable");
+  const sevTone = { high: "bad", medium: "warn", low: "" };
+  const monthly = g.monthly.filter((m) => m.month);
+  const noMonth = g.monthly.find((m) => !m.month);
+  return h`${head}
+    ${g.findings.length ? h`<div class="stack-sm"><h4>What limits these numbers (business case)</h4>
+      ${g.findings.map((f) => h`<div class="callout ${sevTone[f.severity] || ""} stack-sm">
+        <div class="row between"><b>${f.title}</b><span class="row" style="gap:6px">${sevPill(f.severity)}<span class="small">${num(f.rows_affected)} of ${num(f.denominator)} (${f.share_pct}%)</span></span></div>
+        <div class="small">${f.impact}</div>
+        <div class="small"><b>Affects:</b> ${f.metric_affected} · <b>Recommendation:</b> ${f.recommendation}</div></div>`)}</div>` : ""}
+    <div class="grid">
+      ${kpi(num(k.tickets), "tickets")}
+      ${kpi(num(k.resolved), `resolved (${rate(k.resolved, k.tickets)})`)}
+      ${kpi(hrs(k.median_hours), `median time to resolve · based on ${num(k.usable)} of ${num(k.resolved)} resolved (${rate(k.usable, k.resolved)})`, datesBad ? "bad" : "")}
+      ${kpi(rate(k.sla_met, k.sla_measured), `SLA met · ${num(k.sla_measured)} tickets measurable`, datesBad ? "bad" : "")}
+      ${g.escalation ? kpi(rate(k.escalated, k.tickets), "currently escalated") : ""}
+      ${kpi(`$${num(Math.round(k.total_cost || 0))}`, `repair cost · ${num(k.with_cost)} of ${num(k.tickets)} tickets have a cost (${rate(k.with_cost, k.tickets)})`)}
+    </div>
+    ${datesBad ? h`<div class="callout bad small"><b>Time metrics are shown for completeness but are not meaningful for this file:</b> ${datesBad.impact}</div>` : ""}
+    <div class="stack-sm"><h4>Resolution time and SLA by priority</h4>
+      <div class="table-wrap"><table><thead><tr><th>Priority</th><th class="num">Tickets</th><th class="num">Resolved</th><th class="num">Used for time</th><th class="num">Excluded</th><th>Coverage</th><th class="num">Median</th><th class="num">90th pct</th><th class="num">SLA met</th></tr></thead><tbody>
+      ${g.by_priority.map((p) => h`<tr><td><b>${p.priority}</b></td><td class="num">${num(p.tickets)}</td><td class="num">${num(p.resolved)}</td><td class="num">${num(p.usable)}</td>
+        <td class="num">${num(p.excluded)}</td><td style="min-width:120px"><div class="row" style="gap:6px;flex-wrap:nowrap">${bar([[p.resolved ? p.usable / p.resolved : 0, "ok"]])}<span class="small">${rate(p.usable, p.resolved)}</span></div></td>
+        <td class="num">${hrs(p.median_hours)}</td><td class="num">${hrs(p.p90_hours)}</td><td class="num">${rate(p.sla_met, p.sla_measured)} <span class="faint small">of ${num(p.sla_measured)}</span></td></tr>`)}
+      </tbody></table></div>
+      <p class="small muted">Time metrics use only resolved tickets with both dates in the right order ("used for time"); excluded = resolved tickets with a missing or impossible date. Rows with warnings are counted as tickets.</p></div>
+    <div class="stack-sm"><h4>Volume and backlog by month</h4>${volumeChart(monthly)}
+      <p class="small muted">Bars: opened / validly closed per month. Line: open at month end. ${noMonth ? `${num(noMonth.opened)} tickets have no readable creation date and are not on the chart.` : ""} Closures with an impossible date are not counted as closed in any month (${num(g.monthly.reduce((n, m) => n + Number(m.closed_unknown || 0), 0))} tickets).</p></div>
+    <div class="stack-sm"><h4>Repair cost by category</h4>
+      <div class="table-wrap"><table><thead><tr><th>Category</th><th class="num">Tickets</th><th>Cost known</th><th class="num">Total</th><th class="num">Average</th></tr></thead><tbody>
+      ${g.by_category.map((c) => h`<tr><td><b>${c.category}</b></td><td class="num">${num(c.tickets)}</td>
+        <td style="min-width:140px"><div class="row" style="gap:6px;flex-wrap:nowrap">${bar([[c.tickets ? c.with_cost / c.tickets : 0, "accent"]])}<span class="small">${rate(c.with_cost, c.tickets)}</span></div></td>
+        <td class="num">$${num(Math.round(c.total_cost || 0))}</td><td class="num">${c.avg_cost == null ? "–" : `$${num(Math.round(c.avg_cost))}`}</td></tr>`)}
+      </tbody></table></div>
+      <p class="small muted">Totals and averages use tickets with a known cost only. Category source: ${g.category_source.map((c) => `${c.category_source} ${num(c.tickets)}`).join(" · ")} (ai = recovered from the ticket text).</p></div>
+    <details><summary>Technical details</summary><div class="stack-sm small">
+      <div>Tables: ${Object.entries(b.row_counts || {}).filter(([, v]) => typeof v === "number").map(([t, v]) => `${b.target_schema}.${t} (${num(v)})`).join(", ")}</div>
+      <div>Columns used: ${Object.entries(b.roles || {}).map(([r, c]) => `${r} = ${c}`).join(", ")}</div>
+      <ul style="margin:0;padding-left:18px">${checks.map(([n, c]) => h`<li>${c.ok ? "✓" : "✗"} ${n}: ${c.actual}${c.ok ? "" : ` (expected ${c.expected})`}</li>`)}</ul>
+      <div>Every metric's definition (numerator, denominator, exclusions) is in <span class="mono">docs/metrics.md</span> and on each column in the database.</div>
+    </div></details>`;
 };
+
+function volumeChart(months) {
+  if (!months.length) return h`<p class="muted">No dated tickets.</p>`;
+  const W = 760, H = 220, pad = 30, n = months.length, bw = (W - pad * 2) / n;
+  const maxV = Math.max(1, ...months.map((m) => Math.max(Number(m.opened), Number(m.closed), Number(m.backlog || 0))));
+  const y = (v) => H - pad - (Number(v) / maxV) * (H - pad * 2);
+  const line = months.map((m, i) => `${pad + bw * i + bw / 2},${y(m.backlog || 0)}`).join(" ");
+  return h`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Tickets opened, closed and open backlog per month">
+    <line x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}" style="stroke:var(--border)"/>
+    ${months.map((m, i) => h`<g><title>${String(m.month).slice(0, 7)}: opened ${m.opened}, closed ${m.closed}, open at end ${m.backlog}</title>
+      <rect x="${pad + bw * i + bw * 0.1}" y="${y(m.opened)}" width="${bw * 0.38}" height="${H - pad - y(m.opened)}" style="fill:var(--accent)"/>
+      <rect x="${pad + bw * i + bw * 0.52}" y="${y(m.closed)}" width="${bw * 0.38}" height="${H - pad - y(m.closed)}" style="fill:var(--ok)"/>
+      ${i % Math.ceil(n / 8) === 0 ? h`<text x="${pad + bw * i + bw / 2}" y="${H - pad + 16}" text-anchor="middle" style="fill:var(--muted);font-size:11px">${String(m.month).slice(0, 7)}</text>` : ""}</g>`)}
+    <polyline points="${line}" style="fill:none;stroke:var(--warn);stroke-width:2"/>
+    <text x="${pad}" y="${pad - 10}" style="fill:var(--muted);font-size:11px">max ${num(maxV)}</text>
+  </svg>
+  <div class="small row"><span style="color:var(--accent)">■ opened</span><span style="color:var(--ok)">■ closed</span><span style="color:var(--warn)">— open at month end</span></div>`;
+}
 
 // --- drawers ------------------------------------------------------------------------------------
 function openDrawer(title, contentPromise) {
@@ -1079,6 +1154,7 @@ const ACTIONS = {
   },
   applyvalues: (el) => applyValues(Number(el.dataset.i)),
   aimapapply: (el) => applyAiMapChanges(Number(el.dataset.i)),
+  buildgold: () => act(() => api(`/runs/${state.runId}/gold/build`, { method: "POST" }), "Building the business tables…"),
   buildsilver: () => act(() => api(`/runs/${state.runId}/silver/build`, { method: "POST" }), "Building the cleaned table…"),
   automap: () => act(() => api(`/runs/${state.runId}/rules/automap`, { method: "POST" }), "The AI is deciding the leftover values…"),
   rmvalue: async (el) => {

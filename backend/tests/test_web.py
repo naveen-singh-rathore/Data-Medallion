@@ -219,6 +219,10 @@ def proposed(ingest, conn, tmp_path, monkeypatch):
     monkeypatch.setattr(silver_build, "build_silver",
                         lambda run, path=None: builds.append(str(run)) or {"target_table": "x", "rows_kept": 0,
                         "rows_flagged": 0, "rows_rejected": 0, "rows_duplicate": 0})  # fmt: skip
+    from pipeline.gold import build as gold_build  # nor into the real gold schema
+
+    monkeypatch.setattr(gold_build, "build_gold", lambda run, schema="gold", approved_path=None, model_path=None:
+                        builds.append(f"gold:{run}") or {"duration_ms": 0, "checks": {}})  # fmt: skip
     run_id = str(ingest(FIXTURE))
     profile_run(run_id)
     real_ensure_context(run_id, "Domain: test tickets\nTags: owner=person\n\nOne row per ticket.")
@@ -312,7 +316,8 @@ def test_each_rule_is_approved_or_rejected_on_its_own(proposed) -> None:
 
     assert c.post(f"{url}/finish").status_code == 200
     ov = _wait(c, run_id)
-    assert [e["step"] for e in ov["job"]["events"]][-2:] == ["build", "build"]  # finishing builds the cleaned table
+    steps = [e["step"] for e in ov["job"]["events"]]
+    assert steps[-4:] == ["build", "build", "gold", "gold"]  # finishing builds the cleaned table, then gold
     r = c.get(url).json()
     assert r["state"] == "approved" and r["review"]["approved"] == len(keys)  # the decisions stay as a record
     assert c.post(f"{url}/review", json={"key": "column:amount", "decision": "undo"}).status_code in (409, 422)

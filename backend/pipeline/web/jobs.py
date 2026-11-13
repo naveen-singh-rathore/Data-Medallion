@@ -174,9 +174,24 @@ def _build(job: Job, run_id: uuid.UUID) -> None:
             f"warning, {b['rows_rejected']:,} rejected, {b['rows_duplicate']:,} duplicates; every row accounted for")
 
 
+def _gold(job: Job, run_id: uuid.UUID) -> None:
+    from pipeline.gold.build import build_gold
+    from pipeline.web import views
+
+    _step(job, "gold", "Building the business tables and data-quality findings")
+    g = build_gold(run_id, approved_path=views.APPROVED_PATH)
+    ok = sum(c["ok"] for c in g["checks"].values())
+    job.log("gold", f"Business tables built in {g['duration_ms']} ms; {ok}/{len(g['checks'])} reconciliation checks passed")
+
+
+def start_gold(run_id: uuid.UUID) -> dict[str, Any]:
+    return _start(run_id, "gold", lambda job: _gold(job, run_id))
+
+
 def start_build(run_id: uuid.UUID) -> dict[str, Any]:
     def work(job: Job) -> None:
         _build(job, run_id)
+        _gold(job, run_id)
         warm_preview(run_id)
 
     return _start(run_id, "build", work)
@@ -195,6 +210,7 @@ def decide_rules(run_id: uuid.UUID, approve: bool, reason: str | None) -> dict[s
         job.log("resume", f"Decision saved: {result['status']}")
         if approve and result["status"] == "approved":
             _build(job, run_id)
+            _gold(job, run_id)
         warm_preview(run_id)
 
     return _start(run_id, "resume", work)

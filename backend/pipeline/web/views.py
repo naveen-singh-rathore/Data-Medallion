@@ -235,7 +235,18 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
     else:
         silver = ("preview", "preview of the proposed rules")
     stages.append(_stage("silver", "Cleaned data (Silver)", *silver))
-    stages.append(_stage("gold", "Business tables (Gold)", "later", "not built yet"))
+    g, g_current = gold_state(run_id)
+    if running_step == "gold":
+        gold = ("running", "building the business tables")
+    elif g and g_current:
+        gold = ("done", f"{(g['row_counts'] or {}).get('fact_tickets', 0):,} tickets in 4 tables + findings")
+    elif g and g["status"] == "failed":
+        gold = ("error", "build failed: " + (g["error_message"] or "")[:120])
+    elif build and is_current(build, rules) and rules_state == "approved":
+        gold = ("action", "cleaned data changed; build the business tables" if g else "ready to build")
+    else:
+        gold = ("waiting", "available once the cleaned table is built")
+    stages.append(_stage("gold", "Business tables (Gold)", *gold))
 
     return jsonable({
         "run_id": run_id, "file": file_label(run["source_file"]), "started_at": run["started_at"],
@@ -691,3 +702,75 @@ def trace(run_id: uuid.UUID, bronze_id: int) -> dict[str, Any] | None:
                            "plain": explain.describe_column_rule(c.model_dump(mode="json"))} for c in preview.rules.columns],
             }  # fmt: skip
     return jsonable(out)
+
+
+# --- gold ----------------------------------------------------------------------------
+
+
+def gold_state(run_id: uuid.UUID) -> tuple[dict[str, Any] | None, bool]:
+    """(latest gold build, is it built from the run's current silver build)."""
+    from pipeline.gold.build import latest_gold
+
+    g = latest_gold(run_id)
+    s = latest_build(run_id)
+    current = bool(g and s and g["status"] == "succeeded" and g["silver_build_id"] == s["build_id"])
+    return g, current
+
+
+def gold_view(run_id: uuid.UUID) -> dict[str, Any] | None:
+    g, current = gold_state(run_id)
+    if not g:
+        return None
+    out: dict[str, Any] = {"build": {k: g[k] for k in ("build_id", "status", "started_at", "duration_ms", "error_message",
+                                                       "row_counts", "checks", "roles", "silver_build_id", "target_schema")},
+                           "current": current}  # fmt: skip
+    last_ok = g if g["status"] == "succeeded" else None
+    if not last_ok:
+        from pipeline.db import transaction as _tx
+
+        with _tx() as conn, conn.cursor(row_factory=dict_row) as cur:
+            last_ok = cur.execute("SELECT * FROM meta.gold_builds WHERE run_id = %s AND status = 'succeeded'"
+                                  " ORDER BY started_at DESC LIMIT 1", (run_id,)).fetchone()  # fmt: skip
+    if not last_ok:
+        return jsonable(out)
+    schema = sql.Identifier(last_ok["target_schema"])
+    from pipeline.gold.build import load_model
+
+    escalated = sql.SQL(", ").join(sql.Literal(v) for v in load_model().get("escalated_statuses") or [""])
+    q = lambda text: _q_sql(sql.SQL(text).format(g=schema, e=escalated))
+    holder = q("SELECT silver_build_id FROM {g}.fact_tickets LIMIT 1")
+    if not holder or str(holder[0]["silver_build_id"]) != str(last_ok["silver_build_id"]):
+        return jsonable(out | {"note": "the gold tables now hold another run"})
+    escalation = bool((last_ok["row_counts"] or {}).get("escalation_rate"))
+    out |= {
+        "shown_build": str(last_ok["build_id"]),
+        "findings": q("SELECT * FROM {g}.data_quality_findings ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,"
+                      " rows_affected DESC"),
+        "kpis": q("SELECT count(*) AS tickets, count(*) FILTER (WHERE is_resolved) AS resolved,"
+                  " count(*) FILTER (WHERE usable_for_time_metrics) AS usable,"
+                  " round(percentile_cont(0.5) WITHIN GROUP (ORDER BY resolution_hours) FILTER (WHERE usable_for_time_metrics)::numeric, 1) AS median_hours,"
+                  " count(*) FILTER (WHERE sla_met IS NOT NULL) AS sla_measured, count(*) FILTER (WHERE sla_met) AS sla_met,"
+                  " sum(cost) AS total_cost, count(cost) AS with_cost"
+                  + (", count(*) FILTER (WHERE status = ANY(ARRAY[{e}]::text[])) AS escalated" if escalation else "")
+                  + " FROM {g}.fact_tickets")[0],
+        "by_priority": q("SELECT coalesce(priority, '(unknown)') AS priority, count(*) AS tickets, count(*) FILTER (WHERE is_resolved) AS resolved,"
+                         " count(*) FILTER (WHERE usable_for_time_metrics) AS usable,"
+                         " count(*) FILTER (WHERE is_resolved AND NOT usable_for_time_metrics) AS excluded,"
+                         " round(percentile_cont(0.5) WITHIN GROUP (ORDER BY resolution_hours) FILTER (WHERE usable_for_time_metrics)::numeric, 1) AS median_hours,"
+                         " round(percentile_cont(0.9) WITHIN GROUP (ORDER BY resolution_hours) FILTER (WHERE usable_for_time_metrics)::numeric, 1) AS p90_hours,"
+                         " count(*) FILTER (WHERE sla_met IS NOT NULL) AS sla_measured, count(*) FILTER (WHERE sla_met) AS sla_met"
+                         " FROM {g}.fact_tickets GROUP BY 1 ORDER BY 2 DESC"),
+        "monthly": q("SELECT month, sum(opened) AS opened, sum(closed) AS closed, sum(closed_date_unknown) AS closed_unknown,"
+                     " sum(open_at_month_end) AS backlog FROM {g}.volume_backlog GROUP BY 1 ORDER BY 1 NULLS LAST"),
+        "by_category": q("SELECT category, sum(tickets) AS tickets, sum(tickets_with_cost) AS with_cost, sum(total_cost) AS total_cost,"
+                         " round(sum(total_cost) / nullif(sum(tickets_with_cost), 0), 2) AS avg_cost FROM {g}.cost_summary"
+                         " GROUP BY 1 ORDER BY 4 DESC"),
+        "category_source": q("SELECT category_source, sum(tickets) AS tickets FROM {g}.dim_category GROUP BY 1"),
+        "escalation": escalation,
+    }  # fmt: skip
+    return jsonable(out)
+
+
+def _q_sql(query: sql.Composable) -> list[dict[str, Any]]:
+    with transaction() as conn, conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(query).fetchall()

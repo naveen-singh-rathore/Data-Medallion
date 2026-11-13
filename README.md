@@ -69,17 +69,17 @@ flagged `ai_low_confidence`. Results go to `silver.ai_labels` and appear in silv
 changed, and every silver rebuild re-applies them. Identical texts are classified once and cached by
 text hash + prompt version + model + label list (`meta.classification_cache`); 50 per call, CHEAP_MODEL.
 
-| raw_tickets (claude-haiku-5-5, `category_classify_v1`) | |
-| --- | --- |
-| Target rows / distinct masked texts | 2,008 / 1,884 |
-| Calls, cost, time | 38 calls (avg 5.6 s), **$0.041**, 240 s |
-| Recovered (confidence >= 0.6) / low confidence | **1,925** (95.9%) / 83 |
-| Recovered by label | other 977, hvac 479, electrical 277, elevator 162, fire_safety 10, plumbing 8, janitorial 7, pest_control 3, general_maintenance 1, security 1 |
-| Rerun | 1,884 / 1,884 cache hits, 0 calls, $0, 1.3 s |
-| Consistency check (200 rule-mapped rows, report only) | 95.5% agree; disagreements: rule `other` vs AI `general_maintenance` (9) |
+| raw_tickets (claude-haiku-5-5, `category_classify_v1`) | 10 categories | + `it_network` |
+| --- | --- | --- |
+| Target rows / distinct masked texts | 2,008 / 1,884 | 977 / 924 |
+| Calls, cost, time | 38 calls (avg 5.6 s), $0.041, 240 s | 19 calls, **$0.021**, 133 s |
+| Recovered (confidence >= 0.6) / low confidence | 1,925 (977 as `other`) / 83 | **952** (0 `other`) / 25 |
+| Rerun | 100% cache hits, 0 calls, $0 | 100% cache hits, 0 calls, $0 |
+| Consistency check (200 rule-mapped rows, report only) | 95.5% agree | **97.0%** agree |
 
-977 of the recovered `other` are IT / network tickets (Network, IT, WiFi, Connectivity, IT Support): the
-approved standard list has no IT category, so the closed list can only say `other`.
+The first pass showed 977 IT / network tickets landing in `other`: the approved list had no IT category.
+`it_network` was added to the category rule (re-approved, silver rebuilt), which mapped 1,031 tickets by rule
+and halved the rows left for the AI. Final silver: category from rule 9,281, AI 952, unknown 25.
 
 **Eval** (40 hand-labelled tickets): fill `human_label` in `data/eval/category_eval_85113639.csv`
 (the AI's answers are not in the sheet), then `python -m pipeline.cli category-eval data/eval/category_eval_85113639.csv`
@@ -87,7 +87,34 @@ for accuracy, coverage, cost and latency. _Pending labels._
 
 ## Gold
 
-_TODO_
+`python -m pipeline.cli build-gold` (and automatically after **Finish review** / a silver build in the UI)
+builds from `silver.records_clean_valid`. The business model is outside the pipeline: `gold/model.yaml`
+(resolved / escalated statuses, optional role overrides) and `gold/sql/*.sql`; the engine
+(`pipeline/gold/build.py`) maps roles to silver columns from the context tags and the approved date_order
+check, builds in `gold_staging`, reconciles and swaps in one transaction (`meta.gold_builds`).
+
+| Table | Grain |
+| --- | --- |
+| `gold.fact_tickets` (+ `dim_category`, `dim_building`, `dim_priority`) | one row per ticket |
+| `gold.resolution_sla` | created month x priority x category: tickets, resolved, usable, excluded, coverage, median/avg/p90 hours, SLA met rate, escalation rate (current status) |
+| `gold.volume_backlog` | month x category x building: opened, closed, closed_date_unknown, open_at_month_end |
+| `gold.cost_summary` | category x building: tickets, with cost, coverage, total, avg, median |
+| `gold.data_quality_findings` | the business case: what limits the metrics, how many rows, what to do |
+
+Every metric's numerator, denominator, exclusions and flagged-row policy: [docs/metrics.md](docs/metrics.md)
+(also `COMMENT ON COLUMN`). raw_tickets: 10,258 tickets, 5/5 reconciliation checks, 0.3 s. The UI's Gold step
+shows the findings first, then the three marts with coverage and excluded counts next to each metric.
+
+**Business case on raw_tickets** (`gold.data_quality_findings`):
+
+- **Resolution dates are unrelated to creation dates (high).** 35.1% of tickets with both dates resolve
+  before they open, the same as pairing the dates at random (34.8%); correlation 0.01. Even correctly
+  ordered tickets give meaningless durations (median 211 days, SLA met 0.3%): resolution and SLA metrics
+  are built and documented but must not be used for this file until the source records resolution times properly.
+- **Open tickets already have a resolution date (medium):** 2,127 of 6,966.
+- **Cost is missing for 37.1% of tickets (medium):** cost totals are shown with their coverage.
+- **894 of 3,292 resolved tickets (27.2%) are excluded from time metrics** (missing or impossible dates).
+- **952 categories were recovered by AI** from the ticket text; 25 remain unknown.
 
 ## Agents (assessment)
 

@@ -1,0 +1,9 @@
+ticket_id,created_at,resolved_at,category,priority,status,building,cost,sla_hours
+T1,2024-01-01 00:00:00,2024-01-01 10:00:00,hvac,High,Resolved,B1,100,24
+T2,2024-01-02 00:00:00,2024-01-04 00:00:00,HVAC,high,Closed,B1,$200,24
+T3,2024-01-05 00:00:00,,hvac,Low,Open,B2,N/A,24
+T4,2024-02-01 00:00:00,2024-01-15 00:00:00,Plumbing,High,Resolved,B1,50,24
+T5,2024-02-10 00:00:00,,plumbing,low,Escalated,B2,,
+T6,2024-02-11 00:00:00,2024-02-11 06:00:00,plumbing,Low,Resolved,B2,25,
+T7,asap,2024-02-20 00:00:00,Network,High,Resolved,B1,10,8
+T8,2024-01-03 00:00:00,2024-01-03 20:00:00,hvac,High,Resolved,B1,300,24
