@@ -34,3 +34,20 @@ def test_llm_facing_prompts_and_schemas_are_unchanged() -> None:
         "a prompt or schema sent to the model changed; recorded answers will no longer replay "
         "(re-record in live mode, export fixtures, then update LLM_CONTRACT_SHA256)"
     )
+
+
+def test_leftover_mapping_prompt_ignores_the_order_of_standard_values() -> None:
+    """Recorded answers are stored as jsonb, which reorders object keys: a prompt built from a replayed
+    answer must read the same as the one built from the live answer."""
+    from pipeline.silver.rules_schema import ColumnRule, SilverRules
+
+    def prompt(mapping: dict[str, list[str]]) -> str:
+        rule = ColumnRule(name="state", source="state", type="text", confidence=0.8, why="State drives counts.",
+                          mapping=mapping)  # fmt: skip
+        rules = SilverRules(source_run_id="0" * 8 + "-0000-0000-0000-" + "0" * 12, generated_by="agent", columns=[rule])
+        return mapping_assist._prompt(rules, {"state": [{"value": "Done", "count": 3}]}, None)
+
+    as_written = {"in_progress": [], "closed": ["Closed"], "open": ["Open"]}
+    as_jsonb = {k: as_written[k] for k in sorted(as_written, key=lambda k: (len(k), k))}  # jsonb: length, then name
+    assert list(as_written) != list(as_jsonb)
+    assert prompt(as_written) == prompt(as_jsonb)

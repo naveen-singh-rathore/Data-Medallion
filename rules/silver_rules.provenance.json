@@ -1,16 +1,27 @@
 {
   "file": "data/raw_tickets.csv",
   "file_sha256": "2bf36d21997826bc25cf894507a311438ead899e0cb89a6680b2eb62305967d0",
-  "approved_run_id": "85113639-1dc6-469c-990c-a29da5334456",
-  "rules_hash": "63ff2060dc06af6c",
+  "approved_run_id": "74511b78-0b09-4eeb-962f-c3af954b8299",
+  "rules_hash": "b4e104d03d647622",
   "generated_by": "human",
+  "agent": {
+    "model": "claude-opus-5-5",
+    "prompt_version": "dq_agent_v1",
+    "turns": 11,
+    "tool_calls": 20,
+    "validation_attempts": 0,
+    "cost_usd": 0.594565,
+    "duration_ms": 109362,
+    "proposal_fingerprint": "abe449df7ad1450b"
+  },
+  "profile_sample_seed": "74511b78-0b09-4eeb-962f-c3af954b8299",
   "context": {
     "source": "inferred",
-    "text": "facilities maintenance tickets. Each row is a facilities service request logged by building occupants and routed to internal staff or external vendors for resolution. Operations managers use this data to track how quickly issues are resolved against SLA targets, how often requests escalate, and what repairs cost across buildings and request categories.\nLikely metrics: mean time to resolve tickets; SLA compliance rate; ticket volume by category and building; total and average repair cost; escalation rate",
+    "text": "facilities maintenance tickets. Each row represents a facilities service ticket submitted by building occupants and routed to internal crews or external vendors. Facilities managers and finance teams use this data to track response and resolution performance against SLA targets, monitor vendor spending, and understand which buildings and categories generate the most work. Priority and status drive escalation and staffing decisions.\nLikely metrics: mean time to resolution by priority; SLA compliance rate; maintenance cost per building; ticket volume by category; open backlog by status",
     "draft": {
       "domain": "facilities maintenance tickets",
       "repairs": [],
-      "summary": "Each row is a facilities service request logged by building occupants and routed to internal staff or external vendors for resolution. Operations managers use this data to track how quickly issues are resolved against SLA targets, how often requests escalate, and what repairs cost across buildings and request categories.",
+      "summary": "Each row represents a facilities service ticket submitted by building occupants and routed to internal crews or external vendors. Facilities managers and finance teams use this data to track response and resolution performance against SLA targets, monitor vendor spending, and understand which buildings and categories generate the most work. Priority and status drive escalation and staffing decisions.",
       "column_tags": {
         "cost": "money",
         "status": "status",
@@ -20,28 +31,28 @@
         "sla_hours": "duration",
         "ticket_id": "id",
         "created_at": "timestamp",
-        "assigned_to": "person",
+        "assigned_to": "other",
         "description": "free_text",
         "resolved_at": "timestamp",
         "submitted_by": "person",
         "resolution_notes": "free_text"
       },
       "likely_metrics": [
-        "mean time to resolve tickets",
+        "mean time to resolution by priority",
         "SLA compliance rate",
-        "ticket volume by category and building",
-        "total and average repair cost",
-        "escalation rate"
+        "maintenance cost per building",
+        "ticket volume by category",
+        "open backlog by status"
       ],
       "critical_columns": [
         "created_at",
         "resolved_at",
-        "category",
         "priority",
         "status",
-        "building",
+        "sla_hours",
         "cost",
-        "sla_hours"
+        "category",
+        "building"
       ],
       "rejected_columns": []
     }
@@ -54,29 +65,26 @@
       "decision": "approved"
     },
     "column:category": {
-      "decision": "approved",
-      "note": "re-approved by Claude on the user's instruction (add it_network standard value)"
+      "decision": "approved"
     },
     "column:cost": {
       "decision": "approved"
     },
     "column:created_at": {
-      "decision": "approved",
-      "note": "re-approved by Claude on the user's instruction (Part B: add 'epoch seconds' format)"
+      "decision": "approved"
     },
     "column:description": {
       "decision": "approved"
     },
     "column:priority": {
       "decision": "approved",
-      "note": "approved by Claude on the user's instruction (leftovers: normal→medium, urgent!!!/asap→critical)"
+      "note": "approved by Claude on the user's instruction (mapping: hi→high, med/normal→medium, lo→low, crit/urgent!!!/asap→critical)"
     },
     "column:resolution_notes": {
       "decision": "approved"
     },
     "column:resolved_at": {
-      "decision": "approved",
-      "note": "re-approved by Claude on the user's instruction (Part B: add 'epoch seconds' format)"
+      "decision": "approved"
     },
     "column:sla_hours": {
       "decision": "approved"
@@ -90,13 +98,17 @@
     "column:ticket_id": {
       "decision": "approved"
     },
+    "dedup": {
+      "decision": "approved"
+    },
     "row_check:date_order:{\"a\": \"created_at\", \"b\": \"resolved_at\"}": {
       "decision": "approved"
     },
     "row_check:declared_duplicate:{\"id\": \"ticket_id\", \"pattern\": \"(?i)duplicate of ticket #?([0-9]+)\", \"prefix\": \"TKT-\", \"source\": \"resolution_notes\"}": {
-      "decision": "approved"
+      "decision": "approved",
+      "note": "added and approved by Claude on the user's instruction (823 self-declared duplicates)"
     },
-    "row_check:junk_row:{\"id\": \"ticket_id\", \"id_pattern\": \"^[A-Za-z]+-[0-9]{4,5}$\", \"min_empty_share\": \"0.6\"}": {
+    "row_check:junk_row:{\"id\": \"ticket_id\", \"id_pattern\": \"^[A-Za-z0-9_-]+$\", \"min_empty_share\": \"0.5\"}": {
       "decision": "approved"
     },
     "row_check:swapped_columns:{\"a\": \"category\", \"b\": \"description\"}": {

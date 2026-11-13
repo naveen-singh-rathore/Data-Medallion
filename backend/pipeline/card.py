@@ -34,7 +34,7 @@ from pipeline.logging_setup import get_logger
 from pipeline.privacy import column_policies, redact_issue
 from pipeline.profile_issues import SEVERITY_RANK, SHORT_CODES, issue_id
 
-RENDERER_VERSION = "1.1"
+RENDERER_VERSION = "1.2"  # 1.2: header names the file by content hash (no run id, no upload name)
 EVIDENCE_CHARS = 80
 POINTER_NAMES = 3
 EXACT_ATTEMPTS = 3
@@ -58,8 +58,8 @@ ROLE_CODES = {"candidate_key": "key", "categorical": "cat", "free_text": "text",
 class CardInputs:
     """Everything the card is rendered from (profile, context, policies), so rendering stays pure."""
 
-    run_id: str
-    source_file: str
+    run_id: str  # for logs only: never rendered (it is random per database)
+    file_sha256: str  # the card names the data by content, so the same file gives the same card everywhere
     context: dict[str, Any] | None  # meta.dataset_context row
     profiler: dict[str, Any] | None  # summary["profiler"]: version + config hash
     summary: dict[str, Any]
@@ -156,7 +156,7 @@ def header_lines(inputs: CardInputs) -> list[str]:
     prof = inputs.profiler or {}
     return [
         (
-            f"# Dataset card: {inputs.source_file.rsplit('/', 1)[-1]} | run {inputs.run_id[:8]}"
+            f"# Dataset card: file {inputs.file_sha256[:12]}"
             f" | profiler {prof.get('version', '?')} config {prof.get('config_hash', '?')}"
         ),
         (
@@ -240,7 +240,7 @@ def build_card(inputs: CardInputs, budget_tokens: int, chars_per_token: float | 
     """
     ratio = chars_per_token or settings.card_chars_per_token
     policies = column_policies(inputs.columns, inputs.context)
-    inputs = CardInputs(inputs.run_id, inputs.source_file, inputs.context, inputs.profiler, inputs.summary,
+    inputs = CardInputs(inputs.run_id, inputs.file_sha256, inputs.context, inputs.profiler, inputs.summary,
                         [redact_issue(i, policies) for i in inputs.issues], inputs.columns)  # fmt: skip
     draft = (inputs.context or {}).get("draft") or {}
     tags = draft.get("column_tags", {})
@@ -330,10 +330,10 @@ def load_inputs(run_id: uuid.UUID) -> CardInputs:
 
     profile = load_profile(run_id)
     with transaction() as conn:
-        (source_file,) = conn.execute(
-            "SELECT source_file FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)
+        (file_sha256,) = conn.execute(
+            "SELECT file_sha256 FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)
         ).fetchone()  # type: ignore[misc]
-    return CardInputs(str(run_id), source_file, get_context(run_id), profile["summary"].get("profiler"),
+    return CardInputs(str(run_id), file_sha256, get_context(run_id), profile["summary"].get("profiler"),
                       profile["summary"], profile["issues"], profile["columns"])  # fmt: skip
 
 

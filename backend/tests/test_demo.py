@@ -59,3 +59,15 @@ def test_init_db_loads_the_recorded_answers(conn) -> None:
     for name, (table, _, _) in demo.CACHES.items():
         lines = sum(1 for line in (demo.FIXTURES / name).read_text().splitlines() if line.strip())
         assert conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"] >= lines
+
+
+def test_proposal_fingerprint_ignores_the_run_and_key_order() -> None:
+    a = {"source_run_id": "run-a", "columns": [{"name": "x", "mapping": {"open": ["Open"], "closed": []}}]}
+    b = {"columns": [{"mapping": {"closed": [], "open": ["Open"]}, "name": "x"}], "source_run_id": "run-b"}
+    assert demo.proposal_fingerprint(a) == demo.proposal_fingerprint(b)
+    changed = {
+        "source_run_id": "run-a",
+        "columns": [{"name": "x", "mapping": {"open": ["Open", "opened"], "closed": []}}],
+    }
+    assert demo.proposal_fingerprint(changed) != demo.proposal_fingerprint(a)
+    assert demo.proposal_fingerprint(None) is None

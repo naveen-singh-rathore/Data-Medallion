@@ -165,8 +165,10 @@ def test_rule(view: RunView, args: TestRuleArgs) -> dict[str, Any]:
     rule = args.column_rule
     profile = view.profile(rule.source)
     compiled = compile_rules(_one_rule(view, rule), view.run_id, sample=SAMPLE_ROWS)
-    query = sql.SQL("SELECT c.*, b.payload ->> {} AS __raw FROM ({}) c JOIN bronze.records b ON b.bronze_id = c.bronze_id").format(
-        sql.Literal(rule.source), compiled.query)  # fmt: skip
+    # ORDER BY: the top-5 lists below break ties by row order, so it must not depend on the query plan
+    # (file order; replayed reviews compare these results byte for byte).
+    query = sql.SQL("SELECT c.*, b.payload ->> {} AS __raw FROM ({}) c JOIN bronze.records b ON b.bronze_id = c.bronze_id"
+                    " ORDER BY b.bronze_id").format(sql.Literal(rule.source), compiled.query)  # fmt: skip
     with get_ro_conn() as conn:
         rows = conn.cursor(row_factory=dict_row).execute(query, compiled.params).fetchall()
     n = len(rows) or 1

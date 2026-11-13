@@ -108,7 +108,8 @@ def _prompt(rules: SilverRules, todo: dict[str, list[dict[str, Any]]], context: 
             continue
         lines.append(f"COLUMN {c.name}")
         lines.append("Standard values (with spellings already merged):")
-        lines += [f"  {t}: {', '.join(v[:12]) or '-'}" for t, v in (c.mapping or {}).items()]
+        # Sorted: recorded answers come back from jsonb with reordered keys, and the prompt must not depend on it.
+        lines += [f"  {t}: {', '.join(v[:12]) or '-'}" for t, v in sorted((c.mapping or {}).items())]
         lines.append("Leftover values (value × rows):")
         lines += [f"  {x['value']} × {x['count']}" for x in todo[c.name][:MAX_VALUES]]
         lines.append("")

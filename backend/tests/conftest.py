@@ -28,7 +28,17 @@ def conn() -> Iterator[psycopg.Connection]:
 
 
 def _delete_runs_for(conn: psycopg.Connection, paths: set[Path]) -> None:
+    """Delete the fixture files' runs and the LLM cache entries those runs created.
+
+    The dataset card names a file by content, so two tests on the same fixture file send identical
+    requests; without this, one test's scripted answers would be served from the cache to the next.
+    """
     hashes = [bronze.hash_file(p) for p in paths]
+    conn.execute(
+        "DELETE FROM meta.llm_cache WHERE request_hash IN (SELECT c.request_hash FROM meta.llm_calls c"
+        " JOIN meta.ingestion_runs r ON r.run_id = c.run_id WHERE r.file_sha256 = ANY(%s))",
+        (hashes,),
+    )
     conn.execute("DELETE FROM meta.ingestion_runs WHERE file_sha256 = ANY(%s)", (hashes,))
 
 

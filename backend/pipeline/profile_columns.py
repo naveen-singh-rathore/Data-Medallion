@@ -70,9 +70,10 @@ def coarse_mask(value: str) -> str:
     return _DIGIT_RUN.sub("9", _LETTER_RUN.sub("A", value))
 
 
-def column_seed(run_id: object, column: str) -> int:
-    """Stable per-column seed, so samples are the same on every run of the same data."""
-    return int(hashlib.sha256(f"{run_id}:{column}".encode()).hexdigest()[:16], 16)
+def column_seed(sample_seed: object, column: str) -> int:
+    """Per-column seed for value samples. `sample_seed` is the file's content hash by default, so the
+    same file gives the same samples (and the same agent tool results) in every database."""
+    return int(hashlib.sha256(f"{sample_seed}:{column}".encode()).hexdigest()[:16], 16)
 
 
 def profile_size(profile: dict[str, Any]) -> int:
@@ -277,7 +278,7 @@ def pii_hints(column: str, shares: dict[str, float]) -> dict[str, Any]:
 
 
 def samples(raw_informative: list[str], seed: int) -> list[str]:
-    """Values picked with a fixed seed, so the same run always gives the same samples."""
+    """Values picked with a fixed seed, so the same data always gives the same samples."""
     picked = random.Random(seed).sample(raw_informative, min(CFG.samples, len(raw_informative)))
     return [truncate(v) for v in picked]
 

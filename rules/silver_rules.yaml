@@ -1,6 +1,6 @@
 schema_version: '1'
 target_table: silver.records_clean
-source_run_id: 85113639-1dc6-469c-990c-a29da5334456
+source_run_id: 74511b78-0b09-4eeb-962f-c3af954b8299
 generated_by: human
 columns:
 - name: resolution_notes
@@ -23,9 +23,9 @@ columns:
   - 'null'
   required: true
   invalid_action: reject
-  confidence: 0.9
-  why: 14 rows carry 'n/a'/'null' instead of a ticket id; without an id a ticket cannot be tracked or deduplicated,
-    so these 0.14% of rows are rejected rather than inflating ticket volume.
+  confidence: 0.85
+  why: 14 rows carry 'n/a'/'null' as ticket id. A ticket with no id can't be tracked, deduplicated or joined, so
+    these rows are rejected rather than counted twice in volume and backlog.
   addresses:
   - NULLTOK:ticket_id
   generated_by: agent
@@ -40,25 +40,31 @@ columns:
   - '0000-00-00'
   parse_formats:
   - YYYY-MM-DDTHH:MM:SS
+  - YYYY-MM-DDTHH:MM:SSZ
+  - YYYY-MM-DDTHH:MM:SS±HH:MM
   - YYYY-MM-DD HH:MM:SS
-  - MM/DD/YYYY HH:MM AM/PM
+  - YYYY-MM-DD HH:MM
   - YYYY-MM-DD
-  - DD-Mon-YYYY HH:MM
+  - MM/DD/YYYY HH:MM AM/PM
+  - MM/DD/YYYY HH:MM
   - MM/DD/YYYY
   - MM-DD-YYYY HH:MM:SS
+  - DD-Mon-YYYY HH:MM
+  - DD-Mon-YYYY
+  - Mon DD, YYYY
   - epoch seconds
   day_month_order: mdy
-  confidence: 0.75
-  why: created_at uses 8 formats; unifying them is required for time-to-resolve and SLA compliance. 1863 values
-    prove month-first and none day-first, so the 1234 ambiguous slash dates are read as mdy; 'tbd' and 0000-00-00
-    (13 rows) become NULL rather than fake dates.
+  confidence: 0.8
+  why: 'created_at comes in 8 formats. 1,863 values only make sense as month-first and none as day-first, so the
+    1,234 ambiguous slash dates are read as mdy. Tested: only 0.05% of rows stay unparseable. ''tbd'' and ''0000-00-00''
+    become NULL so they don''t skew time-to-resolution.'
   addresses:
   - DATEFMT:created_at
   - AMBIG:created_at
   - NULLTOK:created_at
   - SENTINEL:created_at
   - UNPARSED:created_at
-  generated_by: human
+  generated_by: agent
 - name: resolved_at
   source: resolved_at
   type: timestamp
@@ -66,109 +72,120 @@ columns:
   - trim
   null_tokens:
   - ???
+  - tbd
+  - n/a
+  - 'null'
+  sentinels:
+  - '0000-00-00'
   parse_formats:
   - YYYY-MM-DDTHH:MM:SS
+  - YYYY-MM-DDTHH:MM:SSZ
+  - YYYY-MM-DDTHH:MM:SS±HH:MM
   - YYYY-MM-DD HH:MM:SS
-  - MM/DD/YYYY HH:MM AM/PM
+  - YYYY-MM-DD HH:MM
   - YYYY-MM-DD
-  - DD-Mon-YYYY HH:MM
+  - MM/DD/YYYY HH:MM AM/PM
+  - MM/DD/YYYY HH:MM
   - MM/DD/YYYY
   - MM-DD-YYYY HH:MM:SS
+  - DD-Mon-YYYY HH:MM
+  - DD-Mon-YYYY
+  - Mon DD, YYYY
   - epoch seconds
   day_month_order: mdy
   confidence: 0.75
-  why: 48.2% of resolved_at is empty because the ticket is still open; these NULLs are kept (not required) so open
-    tickets are not miscounted as resolved. 956 values prove mdy, so 630 ambiguous dates are parsed month-first
-    for accurate mean time to resolve.
+  why: resolved_at uses the same 8 formats as created_at. 956 values only make sense as month-first and none as
+    day-first, so mdy is used. 48.2% of rows are empty because those tickets are still open, so the column is not
+    required. The 16 '???' values become NULL so open-backlog and time-to-resolution figures stay correct.
   addresses:
   - DATEFMT:resolved_at
   - AMBIG:resolved_at
+  - EMPTY:resolved_at
   - NULLTOK:resolved_at
   - UNPARSED:resolved_at
-  - EMPTY:resolved_at
-  generated_by: human
+  generated_by: agent
 - name: category
   source: category
   type: text
   steps:
   - trim
   - collapse_spaces
+  - remove_hidden_chars
+  - lower
   null_tokens:
   - ???
   - 'null'
   - unknown
+  - DELETE ME
+  - asdf
+  - test
+  - Misc
+  - Other
   mapping:
+    cleaning:
+    - cleaning
+    - janitorial
+    - Housekeeping
     electrical:
-    - Electrical
-    - Electric
+    - electrical
     - Electrical Systems
+    - Power
     - Elec
+    - power issue
     elevator:
-    - Elevator
-    - ELEVATOR
+    - elevator
+    - elevators
     - Vertical Transport
+    - Lift
     - elevator/escalator
-    - Elevator A-001 stuck between floors 4 and 12. No one inside
-    - Elevator E-048 stuck between floors 2 and 9. No one inside (
-    - Elevator buttons for floor 1 not responding. HQ Floor 1.
-    - Elevator making grinding noise. Annex East main elevator.
-    - Elevator making grinding noise. Annex West main elevator.
-    - elevator out of order again Parking Garage
     fire_safety:
-    - Fire Safety
     - fire safety
-    - Fire/Safety
+    - fire_safety
+    - fire-safety
     - Sprinkler
     - Fire Alarm
     general_maintenance:
-    - General Maintenance
     - general maintenance
+    - general_maintenance
+    - general-maintenance
     - Maintenance
     - General
+    - window cracked HQ Floor 2 6 floor
     hvac:
-    - HVAC
+    - hvac
     - Heating/Cooling
+    - AC
+    - Climate Control
+    - air conditioning
     - HVAC System
-    it_network:
+    - cold
+    network:
     - Network
+    - Connectivity
     - IT/Network
     - IT
     - WiFi
-    - Connectivity
     - IT Support
-    janitorial:
-    - Janitorial
-    - janitorial
-    - Housekeeping
-    - cleaning
-    - CLEANING
-    other:
-    - Other
-    - Misc
     pest_control:
-    - Pest Control
     - pest control
-    - Pest
+    - pest_control
+    - pest-control
     - Exterminator
+    - Pest
     plumbing:
-    - Plumbing
-    - PLUMBING
+    - plumbing
     - Plumbing Issue
-    - water issue
     - Water/Plumbing
+    - pipe burst
+    - water issue
     security:
-    - Security
-    - SECURITY
     - security
     - Access Control
     - Badge/Access
     - Security Systems
-    - Security camera A-040 offline since yesterday. Covers parkin
-    - Security camera E-049 offline since yesterday. Covers parkin
-  confidence: 0.7
-  why: '111 raw spellings split each category (e.g. pest control appears as 4 variants totalling ~1056 rows); without
-    merging, ticket volume and cost by category are fragmented. 13 ''???/null/unknown'' tokens become NULL. it_network
-    added by the reviewer: ~1,000 IT/network tickets had no category in the list.'
+  confidence: 0.65
+  why: 13 groups of casing and separator variants split real categories, for example 'Fire Safety' (216) and 'fire
+    safety' (210), so ticket volume by category is undercounted. 13 placeholder values become NULL.
   addresses:
   - VARIANTS:category
   - NULLTOK:category
@@ -178,29 +195,26 @@ columns:
   type: text
   steps:
   - trim
+  - collapse_spaces
   - lower
   null_tokens:
   - ???
   - 'null'
   mapping:
     critical:
-    - critical
     - crit
     - urgent!!!
     - asap
     high:
-    - high
     - hi
     low:
-    - low
     - lo
     medium:
-    - medium
     - med
     - normal
   confidence: 0.8
-  why: Priority is split by casing (critical×564 vs CRITICAL×558), halving counts per level in SLA and escalation
-    reporting; 10 '???/null' tokens become NULL.
+  why: 19 raw values collapse into a few levels once casing is fixed, for example critical (564) and CRITICAL (558).
+    Without this, time-to-resolution by priority and escalation counts are split in half.
   addresses:
   - VARIANTS:priority
   - NULLTOK:priority
@@ -210,14 +224,15 @@ columns:
   type: text
   steps:
   - trim
+  - collapse_spaces
   - lower
   null_tokens:
   - ???
   - 'null'
   - unknown
-  confidence: 0.85
-  why: 20 rows hold '???/null/unknown' as status; as NULL they no longer appear as a fake status bucket in open/resolved
-    and escalation rate counts.
+  confidence: 0.8
+  why: 20 placeholder statuses ('null', 'unknown', '???') become NULL so they don't show up as a fake status bucket
+    in open-backlog reporting.
   addresses:
   - NULLTOK:status
   generated_by: agent
@@ -230,9 +245,9 @@ columns:
   null_tokens:
   - ???
   - unknown
-  confidence: 0.85
-  why: 19 rows use '???' or 'unknown' as a building name; as NULL they stop forming phantom buildings in volume
-    and cost by building.
+  confidence: 0.8
+  why: 19 placeholder buildings ('???', 'unknown') become NULL so cost per building doesn't book spend to a building
+    that doesn't exist.
   addresses:
   - NULLTOK:building
   generated_by: agent
@@ -246,11 +261,12 @@ columns:
   null_tokens:
   - .
   - 'null'
-  confidence: 0.85
-  why: 8 descriptions are '.' or 'null' placeholders; nulling them keeps free-text analysis of request types honest.
-    Casing is preserved since text is descriptive.
+  confidence: 0.8
+  why: 8 descriptions are placeholders ('.', 'null') and become NULL. The free text is otherwise kept as written
+    so ticket content isn't changed.
   addresses:
   - NULLTOK:description
+  - VARIANTS:description
   generated_by: agent
 - name: submitted_by
   source: submitted_by
@@ -259,9 +275,9 @@ columns:
   - trim
   - collapse_spaces
   - title
-  confidence: 0.8
-  why: The same requester appears in casing-only variants (e.g. 328 vs 320 rows), splitting per-requester volume;
-    only casing/whitespace is normalized, identities are not inferred.
+  confidence: 0.75
+  why: 3 casing-only groups split the same submitter, for example 328 and 320 rows, which double-counts requesters.
+    Only casing and whitespace are normalized; no identities are inferred.
   addresses:
   - VARIANTS:submitted_by
   generated_by: agent
@@ -271,9 +287,12 @@ columns:
   steps:
   - trim
   - collapse_spaces
-  confidence: 0.85
-  why: 30.4% of tickets are not yet assigned; the empty values are meaningful (unassigned queue) and are kept as
-    NULL rather than filled, so staff/vendor workload is not distorted.
+  null_tokens:
+  - n/a
+  - 'null'
+  confidence: 0.75
+  why: 30.4% of tickets (3,122) have no assignee, which most likely means they are not routed yet. They stay NULL
+    and are not treated as errors, so they still count in backlog and staffing analysis.
   addresses:
   - EMPTY:assigned_to
   generated_by: agent
@@ -293,16 +312,15 @@ columns:
   - '-999'
   range:
     min: 0.0
-  confidence: 0.8
-  why: '993 costs carry a ''$'' prefix and would be lost from total repair cost; stripping it parses them (tested:
-    0.05% invalid). -1/-999 placeholders (2.9%) would drag average cost down and become flagged NULLs; ''n/a''/''tbd''
-    (984) and empties (35%) stay NULL as cost not yet known.'
+  confidence: 0.75
+  why: 993 costs have a '$' prefix and 984 are 'n/a', 'tbd' or 'null'. 195 use -1 or -999 to mean unknown; left
+    in, these lower vendor spend and cost per building. Empty costs (35%) stay NULL. Zero is kept for now (see question).
   addresses:
   - MIXED:cost
-  - NUMTXT:cost
-  - NULLTOK:cost
-  - SENTINEL:cost
   - EMPTY:cost
+  - NULLTOK:cost
+  - NUMTXT:cost
+  - SENTINEL:cost
   generated_by: agent
 - name: sla_hours
   source: sla_hours
@@ -317,41 +335,46 @@ columns:
   - '-1'
   range:
     min: 0.0
-    max: 720.0
-  confidence: 0.8
-  why: 999 marks unknown SLA in 7.7% of rows (557+9 with -1); left in, mean SLA target is massively inflated and
-    SLA compliance overstated. 'n/a'/'null' (1046) and empties become NULL; zero (~4.5%) is kept pending human decision.
+  confidence: 0.85
+  why: 999 (557 rows) and -1 (9 rows) mean the SLA is unknown in 7.9% of rows. Left in, they inflate SLA targets
+    and overstate the SLA compliance rate. 1,046 'n/a'/'null' values also become NULL.
   addresses:
   - SENTINEL:sla_hours
-  - NULLTOK:sla_hours
   - EMPTY:sla_hours
+  - NULLTOK:sla_hours
   generated_by: agent
+dedup:
+  key:
+  - ticket_id
+  strategy: keep_latest
+  order_by: resolved_at
+  why: 10,258 distinct ids for about 10,260 non-null ids means a few tickets repeat. Keeping the latest version
+    stops resolved tickets from also being counted in the backlog.
 row_checks:
-- kind: date_order
-  params:
-    a: created_at
-    b: resolved_at
-  action: flag
-  why: 34.7% of comparable rows (1683 of 4853, same share for unambiguous dates) resolve before creation, producing
-    negative resolution times; flagging lets mean-time-to-resolve exclude them without discarding a third of the
-    tickets.
-  addresses:
-  - ORDER:created_at>resolved_at
 - kind: swapped_columns
   params:
     a: category
     b: description
   action: swap
-  why: Some tickets have the description typed into category and the category label into description; swapping them
-    back recovers a real category instead of a sentence.
+  why: At least one category holds description text ('Elevator A-001 stuck be…'). Swapping those values back restores
+    the correct category so ticket volume by category is right.
+- kind: date_order
+  params:
+    a: created_at
+    b: resolved_at
+  action: flag
+  why: 1,866 of 5,319 resolved tickets (35%) appear to be resolved before they were created, which would give negative
+    resolution times. These rows are flagged, not deleted, until a person confirms whether the timestamps are swapped.
+  addresses:
+  - ORDER:created_at>resolved_at
 - kind: junk_row
   params:
     id: ticket_id
-    id_pattern: ^[A-Za-z]+-[0-9]{4,5}$
-    min_empty_share: '0.6'
-  action: reject
-  why: Rows that are mostly empty or placeholders, or whose ticket id is not a ticket id (99.96% follow letters-dash-4/5
-    digits), are not real tickets and would inflate volume.
+    id_pattern: ^[A-Za-z0-9_-]+$
+    min_empty_share: '0.5'
+  action: flag
+  why: 28 rows have 7 or more of 13 cells empty. They are flagged rather than rejected so that tickets with a valid
+    id still count in volume while their missing fields are reviewed.
   addresses:
   - PARTIAL_ROWS:dataset
 - kind: declared_duplicate
@@ -373,6 +396,8 @@ addressed_issues:
 - issue_id: MIXED:cost
   resolution: rule
 - issue_id: SENTINEL:sla_hours
+  resolution: rule
+- issue_id: PARTIAL_ROWS:dataset
   resolution: rule
 - issue_id: NULLTOK:ticket_id
   resolution: rule
@@ -422,55 +447,31 @@ addressed_issues:
   resolution: rule
 - issue_id: NULLTOK:sla_hours
   resolution: rule
-- issue_id: PARTIAL_ROWS:dataset
-  resolution: rule
 needs_human:
 - issue_ids:
   - ORDER:created_at>resolved_at
-  question: 34.7% of tickets (1683 of 4853) have resolved_at before created_at, by 94–424 days, and the share is
-    the same for unambiguous dates, so it is not a day/month mix-up. How should these rows be handled?
+  question: 35% of resolved tickets (1,866) appear to be resolved before they were created. Are created_at and resolved_at
+    swapped at the source, or are these data-entry errors?
   options:
-  - flag only (keep both dates)
-  - null resolved_at for violating rows
-  - reject violating rows
-  - 'investigate source: columns may be swapped or mislabeled'
-  agent_recommendation: Flag for now and investigate the source system. A share this large points to a systematic
-    export problem, not random typos, and rejecting would lose a third of resolved tickets.
-- issue_ids:
-  - DATEFMT:created_at
-  - DATEFMT:resolved_at
-  question: The profiler found 8 date formats, but only 7 could be matched to registry ids. In a test, about 4.5%
-    of created_at values still failed to parse and would become NULL (possibly epoch numbers). Which registry format
-    should cover them?
-  options:
-  - provide the missing format id
-  - accept NULL for these values
-  agent_recommendation: Provide the missing format id. Losing 4.5% of creation timestamps biases ticket volume over
-    time and time to resolve.
-- issue_ids:
-  - SENTINEL:sla_hours
-  question: sla_hours = 0 appears in about 4.5% of sampled rows. Is 0 a real SLA target (e.g. immediate response)
-    or a placeholder for 'no SLA set'?
-  options:
-  - keep 0 as a real value
-  - treat 0 as NULL (sentinel)
-  agent_recommendation: Treat 0 as a sentinel. A 0-hour SLA cannot be met, so it would push SLA compliance down
-    artificially. Kept for now until confirmed.
+  - Flag only and keep both timestamps
+  - Null resolved_at when it is before created_at
+  - Swap the two timestamps
+  - Reject the rows
+  agent_recommendation: Flag only for now. The share is too large to discard, and swapping without confirmation
+    would invent resolution times.
 - issue_ids:
   - MIXED:cost
-  question: cost = 0 appears in about 3.1% of sampled rows. Is it a real zero-cost repair (internal staff) or a
-    placeholder for unknown cost?
+  question: Does a cost of 0 mean a real zero-cost job (for example, done by an internal crew) or an unknown cost?
   options:
-  - keep 0 as real cost
-  - treat 0 as NULL
-  agent_recommendation: Keep 0. Internal fixes at no vendor cost are plausible; confirm with operations.
+  - Keep 0 as a real cost
+  - Treat 0 as unknown (NULL)
+  agent_recommendation: Keep 0 for now. Internal-crew jobs can plausibly cost nothing.
 - issue_ids:
-  - VARIANTS:category
-  question: 'Should subcategory and synonym labels be merged into parent categories: Sprinkler/Fire Alarm into fire_safety,
-    Access Control/Badge-Access into security, Vertical Transport into elevator, Exterminator into pest_control,
-    Housekeeping/cleaning into janitorial, water issue into plumbing?'
+  - AMBIG:created_at
+  - AMBIG:resolved_at
+  question: Slash dates are read as month-first (US). 1,863 and 956 values only make sense that way and none as
+    day-first. Is US order correct for every source system?
   options:
-  - merge as proposed
-  - keep subcategories separate
-  agent_recommendation: Merge as proposed so category-level volume and cost add up. Revisit if the business reports
-    on subcategories.
+  - mdy (US)
+  - dmy
+  agent_recommendation: mdy

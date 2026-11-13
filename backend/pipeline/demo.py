@@ -12,7 +12,9 @@ approved rules (unchanged except `source_run_id`) and the approved context to th
 `export_fixtures` writes all of the above from the current database.
 """
 
+import hashlib
 import json
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -143,6 +145,10 @@ def export_fixtures(run_id: str) -> dict[str, Any]:
     prov = {
         "file": "data/raw_tickets.csv", "file_sha256": _sha(run_id), "approved_run_id": run_id,
         "rules_hash": rules_hash(rules), "generated_by": rules.generated_by,
+        "agent": _recorded_agent(run_id),
+        # the seed the reviewed profile's value samples were drawn with (profiles made before the seed was
+        # stored used their run id); the demo profiles with it, so the recorded review sees the same values
+        "profile_sample_seed": _sample_seed(run_id),
         "context": {"source": ctx.get("source"), "text": ctx.get("text"), "draft": ctx.get("draft")},
         "review": {k: {"decision": v["decision"], **({"reason": v["reason"]} if v.get("reason") else {}),
                        **({"note": v["note"]} if v.get("note") else {})} for k, v in sorted(decisions.items())},
@@ -151,11 +157,106 @@ def export_fixtures(run_id: str) -> dict[str, Any]:
     return counts | {"provenance": str(PROVENANCE.relative_to(REPO_ROOT))}
 
 
+# --- the recorded AI review: replayable on any database -------------------------------------------
+
+
+def proposal_fingerprint(rules: dict[str, Any] | None) -> str | None:
+    """Hash of a proposal's content, ignoring the run it was made for and the order of keys."""
+    if not rules:
+        return None
+    body = {k: v for k, v in rules.items() if k != "source_run_id"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def _agent_proposal(thread_id: str | None) -> dict[str, Any] | None:
+    """The rules exactly as the AI proposed them, from the thread's checkpoint."""
+    from pipeline.dq_agent import runner
+
+    if not thread_id:
+        return None
+    with runner.compiled(mode="replay") as graph:
+        return (graph.get_state(runner.config(thread_id)).values or {}).get("agent_rules")
+
+
+def _sample_seed(run_id: str) -> str:
+    with transaction() as conn:
+        row = conn.execute("SELECT summary -> 'profiler' ->> 'sample_seed' FROM meta.dataset_profiles WHERE run_id = %s",
+                           (run_id,)).fetchone()  # fmt: skip
+    return (row and row[0]) or run_id
+
+
+def _recorded_agent(run_id: str) -> dict[str, Any] | None:
+    """What export-fixtures records about the AI review: its size, cost and the proposal's fingerprint."""
+    from pipeline.dq_agent import runner
+    from pipeline.dq_agent.metrics import latest_agent_run
+
+    row = latest_agent_run(run_id)
+    if not row:
+        return None
+    proposal = _agent_proposal(runner.latest_thread(run_id))
+    return {
+        "model": row["model"], "prompt_version": row["prompt_version"], "turns": row["turns"],
+        "tool_calls": row["tool_calls"], "validation_attempts": row["validation_attempts"],
+        "cost_usd": float(row["cost_usd"] or 0), "duration_ms": row["duration_ms"],
+        "proposal_fingerprint": proposal_fingerprint(proposal),
+    }  # fmt: skip
+
+
+def _discard_review(run_id: str, folder: Path, remove_folder: bool) -> None:
+    """Remove the scratch agent thread of replay_agent, so the run keeps the approved rules from the repository."""
+    with transaction() as conn:
+        for name in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+            conn.execute(
+                sql.SQL("DELETE FROM {} WHERE thread_id LIKE %s").format(sql.Identifier(name)), (f"dq:{run_id}:%",)
+            )
+        conn.execute("DELETE FROM meta.agent_runs WHERE run_id = %s", (run_id,))
+    if remove_folder:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def replay_agent(run_id: str) -> dict[str, Any]:
+    """Replay the recorded AI review on this run with no key and compare it with the recorded proposal.
+
+    Model answers come only from the recorded cache (mode="replay"); the tools and the validator run for
+    real against this database. The scratch thread is discarded afterwards. A run that already has a
+    review is left alone.
+    """
+    from pipeline.dq_agent import graph as dq_graph
+    from pipeline.dq_agent import runner
+    from pipeline.llm import LLMError
+    from pipeline.silver import mapping_assist
+
+    recorded = (json.loads(PROVENANCE.read_text()).get("agent") or {}).get("proposal_fingerprint")
+    if runner.latest_thread(run_id):
+        return {"replayed": False, "reason": "this run already has a review"}
+    folder = dq_graph.run_dir(run_id)
+    existed = folder.exists()
+    try:
+        result = runner.run(run_id, fresh=True, mode="replay")
+        proposal = _agent_proposal(result["thread_id"])
+        seen = [proposal_fingerprint(proposal)]
+        if proposal and recorded not in seen:
+            # the reviewer may have asked the AI to decide leftover values once more: replay that click too
+            try:
+                again = mapping_assist.complete(run_id, SilverRules.model_validate(proposal), mode="replay")
+                seen.append(proposal_fingerprint(again["rules"].model_dump(mode="json")))
+            except LLMError:
+                pass
+        return {"replayed": result["status"] == "awaiting_approval", "status": result["status"],
+                "turns": result["turns"], "tool_calls": result["tool_calls"],
+                "matches_recorded_proposal": (recorded in seen) if recorded else None}  # fmt: skip
+    except LLMError as exc:
+        return {"replayed": False, "reason": str(exc)[:200]}
+    finally:
+        _discard_review(run_id, folder, remove_folder=not existed)
+
+
 # --- the demo -------------------------------------------------------------------------------------
 
 
 def run_demo(path: Path = DEMO_FILE) -> dict[str, Any]:
-    """init-db -> ingest -> profile -> context -> approved rules -> silver -> classification -> gold."""
+    """init-db -> ingest -> profile -> context -> approved rules -> silver -> classification -> gold,
+    then replay the recorded AI review to show that it reproduces (no key, nothing kept)."""
     from pipeline.gold.build import build_gold
     from pipeline.migrate import migrate
     from pipeline.profiling import profile_run
@@ -167,7 +268,8 @@ def run_demo(path: Path = DEMO_FILE) -> dict[str, Any]:
     run_id = str(ingest_file(path))
     run = get_run(uuid.UUID(run_id))
     log.info("bronze ready", run_id=run_id, rows=run["rows_loaded_ok"])
-    profile_run(uuid.UUID(run_id))
+    # Same value samples as the recorded review saw, so its tool results (and the replay) are identical.
+    profile_run(uuid.UUID(run_id), sample_seed=json.loads(PROVENANCE.read_text()).get("profile_sample_seed"))
     ctx = ensure_approved_context(run_id)
     approved = bind_approved(run_id)
     silver = build_silver(run_id, approved)
@@ -179,4 +281,5 @@ def run_demo(path: Path = DEMO_FILE) -> dict[str, Any]:
         "classification": {k: classified[k] for k in ("targets", "cache_hits", "llm_calls", "recovered", "low_confidence")},
         "gold": {"checks": f"{sum(c['ok'] for c in gold['checks'].values())}/{len(gold['checks'])}",
                  "fact_tickets": gold["row_counts"]["fact_tickets"]},
+        "ai_review_replay": replay_agent(run_id),
     }  # fmt: skip

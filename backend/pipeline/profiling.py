@@ -301,18 +301,28 @@ def _store(
     )
 
 
-def profile_run(run_id: uuid.UUID) -> None:
-    """Profile every column of a succeeded bronze run and store profiles + issues."""
+def profile_run(run_id: uuid.UUID, sample_seed: str | None = None) -> None:
+    """Profile every column of a succeeded bronze run and store profiles + issues.
+
+    Value samples are seeded with the file's sha256, so a profile depends only on the file and the
+    profiler config, never on the (random) run id. `sample_seed` overrides it to reproduce a review
+    recorded with another seed (see rules/silver_rules.provenance.json).
+    """
     log = get_logger("profile", run_id=str(run_id))
     started = time.perf_counter()
     with transaction() as conn:
         data = load_run_data(conn, run_id)
         log.info("rows loaded", rows_ok=len(data.frame), columns=len(data.columns))
+        if sample_seed is None:
+            (sample_seed,) = conn.execute(
+                "SELECT file_sha256 FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)
+            ).fetchone()  # type: ignore[misc]
         profiles = [
-            profile_column(c, i, data.frame[c], column_seed(run_id, c), data.reference_time)
+            profile_column(c, i, data.frame[c], column_seed(sample_seed, c), data.reference_time)
             for i, c in enumerate(data.columns, start=1)
         ]
         summary = dataset_summary(data, profiles)
+        summary.setdefault("profiler", {})["sample_seed"] = sample_seed  # recorded, so a review can be reproduced
         issues = assign_ids(sort_issues([*dataset_issues(summary), *(i for p in profiles for i in column_issues(p))],
                                         data.columns))  # fmt: skip
         _store(conn, run_id, profiles, summary, issues)

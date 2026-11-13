@@ -39,7 +39,7 @@ def synthetic(n_columns: int, issue_every: int = 2) -> CardInputs:
     context = {"source": "inferred", "approved": False, "text": "Synthetic data.",
                "draft": {"critical_columns": [names[1]], "column_tags": {names[1]: "id"}}}  # fmt: skip
     profiler = {"version": "1.2", "config_hash": "abc123def456"}
-    return CardInputs("run-x", "synthetic.csv", context, profiler, summary, issues, [column(n) for n in names])
+    return CardInputs("run-x", "ab12" * 16, context, profiler, summary, issues, [column(n) for n in names])
 
 
 def pointer_counts(text: str) -> dict[str, int]:
@@ -155,7 +155,17 @@ def test_card_masks_sensitive_and_high_cardinality_values_but_keeps_vocabulary()
          "evidence": {"count": 2, "kinds": [["currency_prefix", 2]], "examples": ["paid $40 cash", "n/a"]}},
     ]  # fmt: skip
     context = {"source": "inferred", "approved": True, "text": "x", "draft": {"column_tags": {"owner": "person"}}}
-    card = build_card(CardInputs("run-x", "f.csv", context, None, inputs.summary, issues,
+    card = build_card(CardInputs("run-x", "ab12" * 16, context, None, inputs.summary, issues,
                                  [inputs.columns[0], people, free_text]), 4000).text  # fmt: skip
     assert "Jane" not in card and "jane" not in card and "paid $40" not in card
     assert "<A A>" in card and "currency_prefix" in card and "n/a" in card
+
+
+def test_card_names_the_file_by_content_not_by_run() -> None:
+    """Run ids are random per database: a card that showed one could never replay a recorded review."""
+    inputs = synthetic(4)
+    other_run = CardInputs("another-run", inputs.file_sha256, inputs.context, inputs.profiler, inputs.summary,
+                           inputs.issues, inputs.columns)  # fmt: skip
+    card = build_card(inputs, 4000)
+    assert card.text == build_card(other_run, 4000).text
+    assert card.text.startswith(f"# Dataset card: file {inputs.file_sha256[:12]} |") and "run-x" not in card.text
