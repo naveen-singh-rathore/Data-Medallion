@@ -39,6 +39,7 @@ LABEL_MAX_CHARS, LABEL_MAX_WORDS = 40, 4  # longer values are free text that lea
 
 
 def label_like(value: str) -> bool:
+    """Short values that read as labels (not sentences)."""
     return len(value) <= LABEL_MAX_CHARS and len(value.split()) <= LABEL_MAX_WORDS
 
 

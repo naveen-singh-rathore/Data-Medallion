@@ -55,6 +55,7 @@ def _sha(run_id: str) -> str:
 
 
 def bound_path(run_id: str) -> Path:
+    """Where the demo writes the approved rules bound to this run."""
     return BOUND_DIR / f"{run_id}.yaml"
 
 

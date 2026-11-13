@@ -46,6 +46,7 @@ def edited_columns(run_id: uuid.UUID, current: dict[str, Any]) -> list[str]:
 
 
 def editable(run_id: uuid.UUID) -> bool:
+    """The proposal can be edited only while it waits for approval."""
     from pipeline.web.views import agent_snapshot
 
     snap = agent_snapshot(run_id)
@@ -53,6 +54,7 @@ def editable(run_id: uuid.UUID) -> bool:
 
 
 def read(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """The proposal's YAML, the AI's original YAML and whether it is editable."""
     path = proposed_path(str(run_id))
     if not path.exists():
         return None

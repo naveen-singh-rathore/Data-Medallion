@@ -76,6 +76,8 @@ class Row:
 
 @dataclass(frozen=True)
 class RunContext:
+    """Identity and lineage shared by every row of one ingestion run."""
+
     run_id: uuid.UUID
     source_file: str
     ingested_at: datetime
@@ -83,6 +85,8 @@ class RunContext:
 
 @dataclass
 class BatchResult:
+    """Outcome of loading one batch: COPY or row fallback, loaded / malformed / refused counts."""
+
     batch_no: int
     first_line: int
     last_line: int
@@ -95,11 +99,14 @@ class BatchResult:
 
     @property
     def malformed(self) -> int:
+        """Rows loaded with parse_status = 'malformed' in this batch."""
         return sum(self.reasons.values())
 
 
 @dataclass
 class Funnel:
+    """Run-level counts that must reconcile: physical lines -> records -> ok + malformed + refused."""
+
     physical_lines: int = 0
     records_parsed: int = 0
     ok: int = 0
@@ -111,6 +118,7 @@ class Funnel:
     duplicate_hash_groups: int = 0
 
     def add(self, batch: BatchResult) -> None:
+        """Add one batch's counts to the run totals."""
         self.ok += batch.loaded - batch.malformed
         self.malformed += batch.malformed
         self.load_failed += batch.load_failed

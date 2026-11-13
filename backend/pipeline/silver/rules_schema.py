@@ -164,6 +164,7 @@ def rules_json_schema() -> dict[str, Any]:
 
 
 def rules_hash(rules: SilverRules) -> str:
+    """Stable 16-char hash of the rules (identifies a build's exact rules)."""
     payload = json.dumps(rules.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
@@ -194,6 +195,7 @@ def from_yaml(text: str) -> dict[str, Any]:
 
 
 def proposed_path(run_id: str) -> Path:
+    """rules/<run_id>/proposed.yaml: the proposal under review."""
     return RULES_DIR / run_id / "proposed.yaml"
 
 

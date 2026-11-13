@@ -17,11 +17,13 @@ GRAPH_DOC = REPO_ROOT / "docs" / "dq_agent_graph.md"
 
 @contextmanager
 def compiled(client: Any = None, mode: str | None = None) -> Iterator[Any]:
+    """The compiled agent graph with a Postgres checkpointer (pauses survive restarts)."""
     with PostgresSaver.from_conn_string(settings.database_url) as saver:
         yield build_graph(saver, client=client, mode=mode)
 
 
 def thread_numbers(run_id: str) -> list[int]:
+    """Agent thread numbers used so far for a run (thread_id = dq:<run_id>:<n>)."""
     with transaction() as conn:
         rows = conn.execute(
             "SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id LIKE %s", (f"dq:{run_id}:%",)
@@ -30,11 +32,13 @@ def thread_numbers(run_id: str) -> list[int]:
 
 
 def latest_thread(run_id: str) -> str | None:
+    """The newest agent thread of a run, if any."""
     numbers = thread_numbers(run_id)
     return f"dq:{run_id}:{numbers[-1]}" if numbers else None
 
 
 def config(thread_id: str) -> dict[str, Any]:
+    """LangGraph run config for one thread."""
     return {"configurable": {"thread_id": thread_id}, "recursion_limit": 200}
 
 
@@ -69,6 +73,7 @@ def run(run_id: str, fresh: bool = False, client: Any = None, mode: str | None =
 
 
 def resume(run_id: str, payload: dict[str, Any], client: Any = None, mode: str | None = None) -> dict[str, Any]:
+    """Resume the latest thread at its approval pause with the person's decision."""
     thread_id = latest_thread(run_id)
     if not thread_id:
         raise ValueError(f"no agent thread for run {run_id}; run dq-run first")
@@ -80,6 +85,7 @@ def resume(run_id: str, payload: dict[str, Any], client: Any = None, mode: str |
 
 
 def status(run_id: str) -> dict[str, Any]:
+    """Status, pause details and counters of the latest thread."""
     thread_id = latest_thread(run_id)
     if not thread_id:
         return {"status": "no agent thread yet"}
@@ -88,6 +94,7 @@ def status(run_id: str) -> dict[str, Any]:
 
 
 def write_mermaid() -> str:
+    """Render the graph as mermaid into docs/dq_agent_graph.md and return the text."""
     graph = build_graph()
     text = graph.get_graph().draw_mermaid()
     GRAPH_DOC.write_text(

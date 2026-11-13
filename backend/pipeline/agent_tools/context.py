@@ -15,6 +15,8 @@ class ToolError(ValueError):
 
 @dataclass(frozen=True)
 class RunView:
+    """A run's profile and context, loaded once and shared by every tool call."""
+
     run_id: str
     profiles: dict[str, dict[str, Any]]  # column -> profile
     issues: list[dict[str, Any]]
@@ -22,12 +24,14 @@ class RunView:
     policies: dict[str, str]
 
     def profile(self, column: str) -> dict[str, Any]:
+        """The profile of one column; unknown names raise ToolError (returned to the model, not raised)."""
         if column not in self.profiles:
             raise ToolError(f"unknown column {column!r}; columns: {list(self.profiles)}")
         return self.profiles[column]
 
 
 def run_view(run_id: str) -> RunView:
+    """Load the run's column profiles, issues and context tags for the agent tools."""
     profile = load_profile(uuid.UUID(run_id))
     context = get_context(uuid.UUID(run_id))
     return RunView(run_id, {p["column"]: p for p in profile["columns"]}, profile["issues"], context_tags(context),

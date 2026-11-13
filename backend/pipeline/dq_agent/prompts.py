@@ -10,10 +10,12 @@ SUBMIT_TOOL = "submit_rules"
 
 
 def system_prompt(version: str = PROMPT_VERSION) -> str:
+    """The DQ agent's system prompt (prompts/<version>.md)."""
     return (settings.prompts_dir / f"{version}.md").read_text().strip()
 
 
 def submit_rules_tool() -> dict[str, Any]:
+    """The submit_rules tool: its input schema is the SilverRules JSON schema."""
     return dict(
         name=SUBMIT_TOOL,
         description="Submit the complete SilverRules for the flagged columns (call once; resubmit only after "
@@ -24,6 +26,7 @@ def submit_rules_tool() -> dict[str, Any]:
 
 def task_message(context: dict[str, Any] | None, card: str, flagged: list[str], defaults: list[str],
                  required_ids: list[str], tool_budget: int) -> str:  # fmt: skip
+    """The first user message: context, dataset card, flagged columns and the issues to cover."""
     context_text = f"{context['text'].strip()} (source: {context['source']})" if context else "(none provided)"
     return (
         f"BUSINESS CONTEXT\n{context_text}\n\n"

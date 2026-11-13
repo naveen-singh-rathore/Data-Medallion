@@ -36,6 +36,7 @@ def _path(run_id: uuid.UUID | str) -> Path:
 
 
 def load(run_id: uuid.UUID | str) -> dict[str, dict[str, Any]]:
+    """Per-rule decisions of a run (rules/<run>/decisions.json)."""
     path = _path(run_id)
     return json.loads(path.read_text()) if path.exists() else {}
 
@@ -45,10 +46,12 @@ def _write(run_id: uuid.UUID | str, decisions: dict[str, Any]) -> None:
 
 
 def clear(run_id: uuid.UUID | str) -> None:
+    """Forget all per-rule decisions of a run."""
     _path(run_id).unlink(missing_ok=True)
 
 
 def fingerprint(rule: dict[str, Any] | None) -> str | None:
+    """Hash of a rule's content: a decision goes stale when the rule changes after it."""
     if rule is None:
         return None
     content = {k: v for k, v in rule.items() if k != "generated_by"}  # approval re-labels authors; not a change
@@ -56,6 +59,7 @@ def fingerprint(rule: dict[str, Any] | None) -> str | None:
 
 
 def row_check_key(check: dict[str, Any]) -> str:
+    """Stable review key of a row check (kind + params)."""
     return f"row_check:{check['kind']}:{json.dumps(check['params'], sort_keys=True)}"
 
 
@@ -88,6 +92,7 @@ def status(run_id: uuid.UUID | str, rules: dict[str, Any]) -> dict[str, dict[str
 
 
 def summary(states: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Counts per decision state, and whether the review can be finished."""
     counts = {s: sum(v["decision"] == s for v in states.values()) for s in ("pending", "approved", "rejected", "stale")}
     return {**counts, "total": len(states), "can_finish": bool(states) and counts["pending"] == counts["stale"] == 0}
 
@@ -114,6 +119,7 @@ def _save(run_id: uuid.UUID, rules: dict[str, Any], decisions: dict[str, Any]) -
 
 
 def approve(run_id: uuid.UUID, key: str) -> dict[str, Any]:
+    """Approve one rule as it is now."""
     rules = _current(run_id)
     rule = _find(rules, key)
     if rule is None:
@@ -125,6 +131,7 @@ def approve(run_id: uuid.UUID, key: str) -> dict[str, Any]:
 
 
 def reject(run_id: uuid.UUID, key: str, reason: str) -> dict[str, Any]:
+    """Reject one rule with a reason (rejected column rules fall back to their default rule)."""
     reason = (reason or "").strip()
     if len(reason) < MIN_REASON:
         raise ReviewError(f"please give a reason of at least {MIN_REASON} characters")
@@ -163,6 +170,7 @@ def reject(run_id: uuid.UUID, key: str, reason: str) -> dict[str, Any]:
 
 
 def undo(run_id: uuid.UUID, key: str) -> dict[str, Any]:
+    """Withdraw a decision on one rule (a rejection's change is reverted)."""
     decisions = load(run_id)
     record = decisions.pop(key, None)
     if record is None:

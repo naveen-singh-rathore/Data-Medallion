@@ -139,6 +139,7 @@ def issue_sentence(issue: dict[str, Any]) -> str:
 
 
 def describe_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    """An issue with a title, a plain sentence and why it matters."""
     title, why = ISSUES.get(issue["code"], (issue["code"].replace("_", " ").capitalize(), ""))
     return {**issue, "title": title, "plain": issue_sentence(issue), "why": why}
 
@@ -179,6 +180,7 @@ FLAGS = {
 
 
 def flag_label(flag: str) -> str:
+    """Plain words for one quality flag (e.g. 'sentinel:-1')."""
     kind, _, value = flag.partition(":")
     label = FLAGS.get(kind, flag)
     return f"{label}: '{value}'" if value else label
@@ -252,12 +254,14 @@ ROW_ACTIONS = {
 
 
 def describe_row_check(check: dict[str, Any]) -> str:
+    """A row check in plain words, including what happens when it fires."""
     rule = ROW_CHECKS.get(check["kind"], lambda _params: check["kind"])(check["params"])
     link = "; then" if check["action"] in ("swap", "duplicate") or check["kind"] == "junk_row" else "; otherwise"
     return f"{rule[0].upper()}{rule[1:]}{link} {ROW_ACTIONS.get(check['action'], check['action'])}."
 
 
 def describe_dedup(dedup: dict[str, Any]) -> str:
+    """The dedup rule in plain words."""
     key = ", ".join(dedup["key"])
     if dedup["strategy"] == "keep_latest":
         return f"Rows with the same {key} are duplicates; keep the one with the latest {dedup['order_by']}."

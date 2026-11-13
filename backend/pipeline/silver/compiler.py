@@ -58,6 +58,8 @@ STEP_SQL: dict[str, tuple[str, str]] = {  # (prefix, suffix) around the inner ex
 
 @dataclass(frozen=True)
 class CompiledSQL:
+    """The compiled silver query, its rendered text, parameters and the columns it produces."""
+
     query: sql.Composed
     text: str  # rendered SQL (parameters stay as %(run_id)s / %(sample)s)
     params: dict[str, Any]
@@ -85,6 +87,7 @@ def has_raw_column(rule: ColumnRule) -> bool:
 
 
 def clean_expr(rule: ColumnRule, raw: sql.Composable | None = None) -> sql.Composable:
+    """SQL for the column's cleaning steps applied to its raw (or swapped) value."""
     expr: sql.Composable = raw if raw is not None else sql.SQL("(payload ->> {})").format(sql.Literal(rule.source))
     for step in rule.steps:
         prefix, suffix = STEP_SQL[step]
@@ -93,6 +96,7 @@ def clean_expr(rule: ColumnRule, raw: sql.Composable | None = None) -> sql.Compo
 
 
 def sentinel_expr(rule: ColumnRule, clean: sql.Composable) -> sql.Composable:
+    """SQL that is true when the cleaned value is one of the rule's sentinels."""
     if not rule.sentinels:
         return sql.SQL("false")
     text_hit = sql.SQL("{} = ANY({})").format(clean, _text_array(rule.sentinels))
@@ -140,6 +144,7 @@ def mapped_expr(rule: ColumnRule, value: sql.Composable) -> tuple[sql.Composable
 
 
 def typed_expr(rule: ColumnRule, value: sql.Composable) -> sql.Composable:
+    """SQL that casts the value to the rule's type (NULL when it cannot be read)."""
     if rule.type == "text":
         return value
     if rule.type == "integer":
@@ -164,6 +169,7 @@ def typed_expr(rule: ColumnRule, value: sql.Composable) -> sql.Composable:
 
 
 def range_expr(rule: ColumnRule, typed: sql.Composable) -> sql.Composable:
+    """SQL that is true when the typed value is outside the rule's range."""
     if not rule.range or (rule.range.min is None and rule.range.max is None):
         return sql.SQL("false")
     cast = {"date": "::date", "timestamp": "::timestamp"}.get(rule.type, "::numeric")
@@ -210,12 +216,14 @@ def junk_failure(check: RowCheck, rules: SilverRules) -> sql.Composable:
 
 
 def duplicate_of_expr(check: RowCheck) -> sql.Composable:
+    """SQL for the ticket id a row says it duplicates (prefix + captured number)."""
     p = check.params
     return sql.SQL("({} || substring({} FROM {}))").format(sql.Literal(str(p["prefix"])), sql.Identifier(str(p["source"])),
                                                          sql.Literal(str(p["pattern"])))  # fmt: skip
 
 
 def row_check_failure(check: RowCheck, rules: SilverRules | None = None) -> sql.Composable:
+    """SQL that is true when a row check fires for the row."""
     p = check.params
     if check.kind == "swapped_columns":
         by_name = {c.name: c for c in rules.columns}  # type: ignore[union-attr]
@@ -480,4 +488,5 @@ def write_compiled(compiled: CompiledSQL, run_id: str) -> Path:
 
 
 def sql_digest(compiled: CompiledSQL) -> str:
+    """Short hash of the compiled SQL text (stored with each build)."""
     return hashlib.sha256(compiled.text.encode()).hexdigest()[:16]

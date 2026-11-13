@@ -14,6 +14,8 @@ PROFILER_VERSION = "1.3"
 
 @dataclass(frozen=True)
 class ProfileConfig:
+    """Every profiler threshold and token list in one place; its hash is stored with each profile."""
+
     # --- tokens ---------------------------------------------------------------
     # Matched case-insensitively after strip(). Values made only of punctuation/symbols
     # ("???", "--", "**") are null-like too, by rule rather than by list.
@@ -95,6 +97,7 @@ PROFILE_CONFIG = ProfileConfig()
 
 
 def config_dict(config: ProfileConfig = PROFILE_CONFIG) -> dict[str, Any]:
+    """The config as a plain dict (stored with the profile)."""
     return asdict(config)
 
 

@@ -39,6 +39,8 @@ Profile = dict[str, Any]
 
 @dataclass(frozen=True)
 class RunData:
+    """A run's bronze rows as a string DataFrame, plus column names and counts."""
+
     run_id: uuid.UUID
     columns: list[str]  # normalized names, in header order
     frame: pd.DataFrame  # object dtype: raw strings, None = key absent
@@ -322,6 +324,7 @@ def profile_run(run_id: uuid.UUID) -> None:
 
 
 def latest_succeeded_run() -> uuid.UUID:
+    """The most recent succeeded ingestion run (raises MissingRunError when there is none)."""
     with transaction() as conn:
         row = conn.execute(
             "SELECT run_id FROM meta.ingestion_runs WHERE status = 'succeeded' ORDER BY started_at DESC LIMIT 1"

@@ -26,6 +26,8 @@ class Busy(RuntimeError):
 
 @dataclass
 class Job:
+    """A background job of one run, with its event log (shown live in the UI)."""
+
     run_id: str
     kind: str
     state: str = "running"  # running | done | error
@@ -36,6 +38,7 @@ class Job:
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def log(self, step: str, message: str, state: str = "done") -> None:
+        """Append an event to the job's log."""
         self.events.append({"at": datetime.now(UTC).isoformat(), "step": step, "state": state, "message": message})
 
 
@@ -45,6 +48,7 @@ _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ui-job")
 
 
 def current(run_id: uuid.UUID | str) -> dict[str, Any] | None:
+    """The run's current (or last) job, if any."""
     job = _jobs.get(str(run_id))
     return asdict(job) if job else None
 
@@ -113,6 +117,7 @@ def start_intake(run_id: uuid.UUID) -> dict[str, Any]:
 
 
 def start_reprofile(run_id: uuid.UUID) -> dict[str, Any]:
+    """Run profiling, the context draft and the briefing again."""
     return start_intake(run_id)
 
 
@@ -127,6 +132,8 @@ def retry_context(run_id: uuid.UUID) -> dict[str, Any]:
 
 
 def save_human_context(run_id: uuid.UUID, text: str) -> dict[str, Any]:
+    """Store a person's business description, then refresh the briefing."""
+
     def work(job: Job) -> None:
         _step(job, "context", "Saving your business description")
         ensure_context(run_id, text)
@@ -145,6 +152,7 @@ def warm_preview(run_id: uuid.UUID) -> None:
 
 
 def start_agent(run_id: uuid.UUID, fresh: bool) -> dict[str, Any]:
+    """Start the AI review (drafting the context first if it is missing)."""
     from pipeline.dq_agent import runner
 
     def work(job: Job) -> None:
@@ -161,6 +169,7 @@ def start_agent(run_id: uuid.UUID, fresh: bool) -> dict[str, Any]:
 
 
 def auto_map(run_id: uuid.UUID) -> dict[str, Any]:
+    """Let the cheap model decide the leftover values of the open proposal."""
     from pipeline.web import rules_edit
 
     def work(job: Job) -> None:
@@ -206,10 +215,13 @@ def _gold(job: Job, run_id: uuid.UUID) -> None:
 
 
 def start_gold(run_id: uuid.UUID) -> dict[str, Any]:
+    """Rebuild gold in the background."""
     return _start(run_id, "gold", lambda job: _gold(job, run_id))
 
 
 def start_build(run_id: uuid.UUID) -> dict[str, Any]:
+    """Build silver, then gold, in the background."""
+
     def work(job: Job) -> None:
         _build(job, run_id)
         _gold(job, run_id)
@@ -219,6 +231,7 @@ def start_build(run_id: uuid.UUID) -> dict[str, Any]:
 
 
 def decide_rules(run_id: uuid.UUID, approve: bool, reason: str | None) -> dict[str, Any]:
+    """Apply the person's approval or rejection; on approval build silver and gold."""
     from pipeline.dq_agent import runner
 
     def work(job: Job) -> None:

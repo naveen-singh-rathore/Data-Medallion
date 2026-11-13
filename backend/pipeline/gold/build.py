@@ -42,6 +42,7 @@ class GoldError(PipelineError, RuntimeError):
 
 
 def load_model(path: Path | None = None) -> dict[str, Any]:
+    """The business model for gold (gold/model.yaml): statuses and optional role overrides."""
     return yaml.safe_load((path or GOLD_DIR / "model.yaml").read_text()) or {}
 
 
@@ -245,6 +246,7 @@ def _checks(conn: Any, schema: sql.Identifier, silver_rows: int) -> dict[str, di
 
 def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Path | None = None,
                model_path: Path | None = None) -> dict[str, Any]:  # fmt: skip
+    """Build gold (fact, dimensions, marts, findings) from the current silver build; reconcile and swap in one transaction."""
     run_id = str(run_id)
     log = get_logger("gold.build", run_id=run_id)
     rules, _ = approved_rules(run_id, approved_path)
@@ -322,6 +324,7 @@ def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Pat
 
 
 def latest_gold(run_id: uuid.UUID | str) -> dict[str, Any] | None:
+    """The most recent gold build of a run, if any."""
     with transaction() as conn, conn.cursor(row_factory=dict_row) as cur:
         return cur.execute("SELECT * FROM meta.gold_builds WHERE run_id = %s ORDER BY started_at DESC LIMIT 1",
                            (str(run_id),)).fetchone()  # fmt: skip

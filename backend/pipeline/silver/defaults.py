@@ -18,11 +18,13 @@ DEFAULT_WHY = "Default for a column with no profiler issues: trims whitespace an
 
 
 def target_name(source: str) -> str:
+    """A safe snake_case target column name for a source column."""
     name = re.sub(r"[^a-z0-9_]+", "_", source.lower()).strip("_") or "column"
     return name if name[0].isalpha() else f"c_{name}"
 
 
 def default_column_rule(profile: dict[str, Any]) -> ColumnRule:
+    """A conservative rule for a column without issues: trim, and its type only when confident."""
     t = profile["type_inference"]
     col_type = TYPE_MAP.get(t["dominant_type"], "text") if t["confidence"] >= SAFE_TYPE_CONFIDENCE else "text"
     extra: dict[str, Any] = {}
@@ -47,6 +49,7 @@ def default_column_rule(profile: dict[str, Any]) -> ColumnRule:
 
 
 def flagged_columns(issues: list[dict[str, Any]]) -> set[str]:
+    """Columns named by any issue (cross-column issues name both columns)."""
     return {c for i in issues if i["column"] for c in i["column"].split(" > ")}
 
 

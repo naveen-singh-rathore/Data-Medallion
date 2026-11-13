@@ -48,6 +48,8 @@ DATE_TYPES = ("date", "timestamp")
 
 @dataclass
 class ValidationReport:
+    """Validator outcome: the last layer run, errors (block), warnings (for the reviewer), stats."""
+
     ok: bool
     layer: str  # last layer run: schema | semantic | dry_run | coverage
     errors: list[str] = field(default_factory=list)
@@ -110,6 +112,7 @@ def _has(node: Any, key: Any) -> bool:
 
 
 def check_schema(raw: Any) -> tuple[SilverRules | None, list[str]]:
+    """Parse into SilverRules; return errors with field paths instead of raising."""
     if isinstance(raw, SilverRules):
         return raw, []
     try:
@@ -123,11 +126,14 @@ def check_schema(raw: Any) -> tuple[SilverRules | None, list[str]]:
 
 @dataclass(frozen=True)
 class RunFacts:
+    """What the meaning checks need from a run: its header and its issues by id."""
+
     header: list[str]
     issues: dict[str, dict[str, Any]]  # id -> issue
 
 
 def run_facts(run_id: str) -> RunFacts:
+    """Load the run's header and profiled issues."""
     with transaction() as conn:
         header = conn.execute("SELECT header FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)).fetchone()
         issues = conn.execute("SELECT issues FROM meta.dataset_profiles WHERE run_id = %s", (run_id,)).fetchone()
@@ -358,6 +364,7 @@ def coverage_errors(rules: SilverRules, facts: RunFacts) -> list[str]:
 
 
 def validate_rules(rules_or_dict: SilverRules | dict[str, Any], run_id: str | uuid.UUID) -> ValidationReport:
+    """Validate in four layers (schema, meaning, dry run, coverage), stopping at the first failing one."""
     run_id = str(run_id)
     rules, errors = check_schema(rules_or_dict)
     if errors or rules is None:

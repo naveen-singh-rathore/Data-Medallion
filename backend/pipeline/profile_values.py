@@ -23,6 +23,7 @@ _LINE_CHARS = frozenset("\t\n\r")
 
 
 def truncate(value: str) -> str:
+    """A value cut to the profiler's display length."""
     return value[: CFG.max_chars]
 
 
@@ -32,6 +33,7 @@ def ranked(counts: Counter[Any]) -> list[tuple[Any, int]]:
 
 
 def share(count: int, total: int) -> float:
+    """count / total rounded to 4 places (0.0 for an empty total)."""
     return round(count / total, 4) if total else 0.0
 
 
@@ -76,6 +78,7 @@ def normalization_key(value: str) -> str:
 
 
 def group_by_key(raw_counts: Counter[str]) -> dict[str, Counter[str]]:
+    """Raw values grouped by normalization key (case, spacing and punctuation folded)."""
     groups: dict[str, Counter[str]] = defaultdict(Counter)
     for raw, count in raw_counts.items():
         groups[normalization_key(raw)][raw] += count
@@ -203,6 +206,7 @@ def _is_spike(counts: Counter[Any], value: Any, total: int) -> bool:
 
 
 def number_label(number: float) -> str:
+    """A float as text without a trailing .0."""
     return str(int(number)) if number.is_integer() else str(number)
 
 

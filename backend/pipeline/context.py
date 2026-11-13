@@ -40,6 +40,8 @@ Tag = Literal["id", "timestamp", "category", "status", "priority", "money", "qua
 
 
 class ColumnTag(BaseModel):
+    """One column's kind in the business context (person columns are masked everywhere after)."""
+
     column: str
     tag: Tag
 
@@ -295,6 +297,7 @@ def ensure_context(
 
 
 def approve_context(run_id: uuid.UUID) -> bool:
+    """Mark an older, unapproved inferred context as in use. Returns False when there is none."""
     with transaction() as conn:
         updated = conn.execute(
             "UPDATE meta.dataset_context SET approved = true WHERE run_id = %s AND source = 'inferred'", (run_id,)

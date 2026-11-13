@@ -88,5 +88,6 @@ def _agent_rows(run_id: uuid.UUID) -> list[tuple[str, str]]:
 
 
 def format_rows(rows: list[tuple[str, str]]) -> str:
+    """Render (label, value) rows as an aligned two-column block."""
     width = max(len(label) for label, _ in rows)
     return "\n".join(f"  {label:<{width}}  {value}" for label, value in rows)

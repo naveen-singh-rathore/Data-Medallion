@@ -50,12 +50,14 @@ def _safe_name(name: str) -> str:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    """Liveness plus the LLM mode and models in use."""
     return {"ok": True, "llm_mode": settings.llm_mode, "main_model": settings.main_model,
             "cheap_model": settings.cheap_model}  # fmt: skip
 
 
 @app.get("/api/runs")
 def runs() -> list[dict[str, Any]]:
+    """All runs with their review and build state, newest first."""
     out = []
     for r in views.list_runs():
         job = jobs.current(r["run_id"])
@@ -100,6 +102,7 @@ async def upload(file: UploadFile = REQUIRED_FILE, force: bool = Query(False)) -
 
 @app.get("/api/runs/{run_id}")
 def run_overview(run_id: uuid.UUID) -> dict[str, Any]:
+    """The nine checkpoints of a run and the current background job."""
     view = _found(views.overview(run_id, jobs.current(run_id)), "run not found")
     if view["rules_state"]:
         jobs.warm_preview(run_id)
@@ -108,6 +111,7 @@ def run_overview(run_id: uuid.UUID) -> dict[str, Any]:
 
 @app.get("/api/runs/{run_id}/bronze")
 def bronze(run_id: uuid.UUID) -> dict[str, Any]:
+    """Bronze funnel, batches, refused rows and repeated rows of a run."""
     _found(views.run_row(run_id), "run not found")
     return views.bronze_view(run_id)
 
@@ -115,30 +119,37 @@ def bronze(run_id: uuid.UUID) -> dict[str, Any]:
 @app.get("/api/runs/{run_id}/bronze/rows")
 def bronze_rows(run_id: uuid.UUID, status: str | None = None, offset: int = 0, limit: int = 50,
                 q: str | None = None) -> dict[str, Any]:  # fmt: skip
+    """Bronze rows (paged), optionally filtered by parse status or text."""
     return views.bronze_rows(run_id, status, offset, limit, q)
 
 
 @app.get("/api/runs/{run_id}/profile")
 def profile(run_id: uuid.UUID) -> dict[str, Any]:
+    """The run's dataset profile with issues in plain language."""
     return _found(views.profile_view(run_id), "not profiled yet")
 
 
 @app.get("/api/runs/{run_id}/profile/{column}")
 def profile_column(run_id: uuid.UUID, column: str) -> dict[str, Any]:
+    """One column's full profile."""
     return _found(views.column_profile(run_id, column), "column not found")
 
 
 @app.get("/api/runs/{run_id}/context")
 def context(run_id: uuid.UUID) -> dict[str, Any]:
+    """The business context in use, and the person's vs the AI's version."""
     return views.context_view(run_id)
 
 
 class ContextIn(BaseModel):
+    """A business description written by a person."""
+
     text: str = Field(min_length=20, max_length=20_000)
 
 
 @app.post("/api/runs/{run_id}/context")
 def context_save(run_id: uuid.UUID, body: ContextIn) -> dict[str, Any]:
+    """Save a person's business description (replaces the AI's) and refresh the briefing."""
     _found(views.run_row(run_id), "run not found")
     return _busy(lambda: jobs.save_human_context(run_id, body.text))
 
@@ -152,47 +163,59 @@ def context_retry(run_id: uuid.UUID) -> dict[str, Any]:
 
 @app.post("/api/runs/{run_id}/reprofile")
 def reprofile(run_id: uuid.UUID) -> dict[str, Any]:
+    """Run the health check, context draft and briefing again."""
     return _busy(lambda: jobs.start_reprofile(run_id))
 
 
 @app.get("/api/runs/{run_id}/card")
 def card(run_id: uuid.UUID) -> dict[str, Any]:
+    """The exact briefing the AI reviewer reads."""
     return _found(views.card_view(run_id), "no briefing yet")
 
 
 @app.get("/api/runs/{run_id}/agent")
 def agent(run_id: uuid.UUID) -> dict[str, Any]:
+    """The AI review: status, transcript, tool calls, cost."""
     return views.agent_view(run_id)
 
 
 class AgentStart(BaseModel):
+    """Start the AI review; fresh = a new thread instead of resuming the latest."""
+
     fresh: bool = False
 
 
 @app.post("/api/runs/{run_id}/agent/start")
 def agent_start(run_id: uuid.UUID, body: AgentStart) -> dict[str, Any]:
+    """Start (or resume) the AI review in the background."""
     _found(views.run_row(run_id), "run not found")
     return _busy(lambda: jobs.start_agent(run_id, body.fresh))
 
 
 @app.get("/api/runs/{run_id}/rules")
 def rules(run_id: uuid.UUID) -> dict[str, Any]:
+    """The proposed or approved rules, explained rule by rule with review state."""
     return _found(views.rules_view(run_id), "no rules proposed yet")
 
 
 class Decision(BaseModel):
+    """Approve or reject the whole proposal (rejecting needs a reason)."""
+
     approve: bool
     reason: str | None = Field(default=None, max_length=2000)
 
 
 @app.post("/api/runs/{run_id}/rules/decision")
 def rules_decision(run_id: uuid.UUID, body: Decision) -> dict[str, Any]:
+    """Approve or reject the proposal as a whole (resumes the agent thread)."""
     if not body.approve and not (body.reason and body.reason.strip()):
         raise HTTPException(422, "please give a reason for rejecting")
     return _busy(lambda: jobs.decide_rules(run_id, body.approve, body.reason))
 
 
 class RulesText(BaseModel):
+    """The rules as YAML text."""
+
     text: str = Field(min_length=1, max_length=500_000)
 
 
@@ -204,6 +227,7 @@ def _idle(run_id: uuid.UUID) -> None:
 
 @app.get("/api/runs/{run_id}/rules/yaml")
 def rules_yaml(run_id: uuid.UUID) -> dict[str, Any]:
+    """The proposal's YAML, the AI's original, and whether it can be edited."""
     return _found(rules_edit.read(run_id), "no proposed rules yet")
 
 
@@ -228,6 +252,7 @@ def rules_save(run_id: uuid.UUID, body: RulesText) -> dict[str, Any]:
 
 @app.post("/api/runs/{run_id}/rules/reset")
 def rules_reset(run_id: uuid.UUID) -> dict[str, Any]:
+    """Undo all edits: put the AI's original proposal back."""
     _idle(run_id)
     try:
         report = rules_edit.reset(run_id)
@@ -240,6 +265,8 @@ def rules_reset(run_id: uuid.UUID) -> dict[str, Any]:
 
 
 class RuleDecision(BaseModel):
+    """A decision on one rule: approve, reject (with reason) or undo."""
+
     key: str = Field(min_length=1, max_length=500)
     decision: str = Field(pattern="^(approve|reject|undo)$")
     reason: str | None = Field(default=None, max_length=2000)
@@ -265,6 +292,8 @@ def rules_review(run_id: uuid.UUID, body: RuleDecision) -> dict[str, Any]:
 
 
 class ValueChoice(BaseModel):
+    """What to do with one value outside a column's standard list."""
+
     value: str = Field(max_length=500)
     action: str = Field(pattern="^(merge|new|empty|keep|remove)$")
     target: str | None = Field(default=None, max_length=500)
@@ -272,6 +301,8 @@ class ValueChoice(BaseModel):
 
 
 class ValueChoices(BaseModel):
+    """Choices for several leftover values of one column."""
+
     column: str = Field(min_length=1, max_length=200)
     choices: list[ValueChoice] = Field(min_length=1, max_length=500)
 
@@ -335,32 +366,38 @@ def silver_build(run_id: uuid.UUID) -> dict[str, Any]:
 
 @app.get("/api/runs/{run_id}/gold")
 def gold(run_id: uuid.UUID) -> dict[str, Any]:
+    """Gold tables, metrics with coverage, and data-quality findings."""
     return _found(views.gold_view(run_id), "gold not built yet")
 
 
 @app.post("/api/runs/{run_id}/gold/build")
 def gold_build(run_id: uuid.UUID) -> dict[str, Any]:
+    """Rebuild gold from the current silver build (background)."""
     return _busy(lambda: jobs.start_gold(run_id))
 
 
 @app.get("/api/runs/{run_id}/silver")
 def silver(run_id: uuid.UUID) -> dict[str, Any]:
+    """Silver preview: counts by status and per-column before/after stats."""
     return _found(views.silver_summary(run_id), "no rules to preview yet")
 
 
 @app.get("/api/runs/{run_id}/silver/rows")
 def silver_rows(run_id: uuid.UUID, show: str = "changed", column: str | None = None, offset: int = 0,
                 limit: int = 50) -> dict[str, Any]:  # fmt: skip
+    """Silver rows (paged): changed, rejected, flagged or all."""
     return _found(views.silver_rows(run_id, show, column, offset, limit), "no rules to preview yet")
 
 
 @app.get("/api/runs/{run_id}/silver/columns/{column}")
 def silver_column(run_id: uuid.UUID, column: str) -> dict[str, Any]:
+    """One silver column: value changes and errors."""
     return _found(views.silver_column(run_id, column), "column not found")
 
 
 @app.get("/api/runs/{run_id}/trace/{bronze_id}")
 def trace(run_id: uuid.UUID, bronze_id: int) -> dict[str, Any]:
+    """The journey of one record: file line -> bronze payload -> silver values with the fixes applied."""
     return _found(views.trace(run_id, bronze_id), "record not found")
 
 
@@ -369,4 +406,5 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/{_path:path}", include_in_schema=False)
 def spa(_path: str) -> FileResponse:
+    """Serve the single-page UI for any non-API path."""
     return FileResponse(STATIC_DIR / "index.html")

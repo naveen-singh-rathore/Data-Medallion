@@ -71,10 +71,12 @@ def coarse_mask(value: str) -> str:
 
 
 def column_seed(run_id: object, column: str) -> int:
+    """Stable per-column seed, so samples are the same on every run of the same data."""
     return int(hashlib.sha256(f"{run_id}:{column}".encode()).hexdigest()[:16], 16)
 
 
 def profile_size(profile: dict[str, Any]) -> int:
+    """Size of a column profile in bytes (UTF-8 JSON)."""
     return len(json.dumps(profile, ensure_ascii=False).encode())
 
 
@@ -82,6 +84,7 @@ def profile_size(profile: dict[str, Any]) -> int:
 
 
 def completeness(values: pd.Series, present: pd.Series, stripped: pd.Series, kinds: pd.Series) -> dict[str, Any]:
+    """Absent, empty, whitespace-only and null-like counts and shares."""
     total = len(values)
     absent = int(values.isna().sum())
     empty = int((present == "").sum())
@@ -119,6 +122,7 @@ def role_hint(distinct: int, ratio: float, avg_words: float) -> str:
 
 
 def cardinality(raw_informative: list[str]) -> dict[str, Any]:
+    """Distinct count, ratio and a role hint (id, label, free text ...)."""
     distinct = len(set(raw_informative))
     ratio = share(distinct, len(raw_informative))
     avg_words = round(statistics.fmean(len(v.split()) for v in raw_informative), 2) if raw_informative else 0.0
@@ -127,6 +131,7 @@ def cardinality(raw_informative: list[str]) -> dict[str, Any]:
 
 
 def frequency(present: list[str]) -> dict[str, Any]:
+    """Top values with counts, and how much of the column they cover."""
     counts = Counter(present)
     return {
         "top_values": [[truncate(v), c] for v, c in ranked(counts)[: CFG.top_values]],
@@ -135,6 +140,7 @@ def frequency(present: list[str]) -> dict[str, Any]:
 
 
 def shape(present: pd.Series, stripped: pd.Series) -> dict[str, Any]:
+    """Lengths, leading/trailing spaces and hidden characters."""
     lengths = present.str.len()
     padded = present[(present != stripped) & (stripped != "")]
     result: dict[str, Any] = {
@@ -149,6 +155,7 @@ def shape(present: pd.Series, stripped: pd.Series) -> dict[str, Any]:
 
 
 def patterns(informative: list[str]) -> dict[str, Any]:
+    """Value shape masks (A = letter, 9 = digit) and their counts."""
     masks = Counter(mask(v) for v in informative)
     return {
         "distinct_masks": len(masks),
@@ -252,6 +259,7 @@ def numeric_profile(informative: list[str], numbers: list[float], excluded: set[
 
 
 def text_profile(informative: list[str]) -> dict[str, Any]:
+    """Word and length statistics for free-text columns."""
     return {
         "avg_words": round(statistics.fmean(len(v.split()) for v in informative), 2) if informative else 0.0,
         "max_length": max((len(v) for v in informative), default=0),
@@ -259,6 +267,7 @@ def text_profile(informative: list[str]) -> dict[str, Any]:
 
 
 def pii_hints(column: str, shares: dict[str, float]) -> dict[str, Any]:
+    """Shares of email/phone/name-like values and PII words in the column name."""
     name_words = set(re.split(r"[^a-z0-9]+", column.lower()))
     return {
         "email_share": shares["email"],

@@ -16,6 +16,8 @@ LLM_MODES = ("live", "replay", "record")
 
 @dataclass(frozen=True)
 class Settings:
+    """Runtime settings, read once from the environment (and .env)."""
+
     database_url: str
     log_level: str
     batch_size: int

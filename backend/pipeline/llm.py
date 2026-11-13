@@ -57,6 +57,8 @@ class LLMCacheMiss(LLMError):
 
 @dataclass(frozen=True)
 class LLMResult:
+    """One LLM answer with its usage, cost, latency and cache status."""
+
     call_id: uuid.UUID
     text: str
     data: Any  # parsed JSON when a json_schema was given, else None
@@ -73,6 +75,7 @@ class LLMResult:
 
 
 def canonical_json(value: Any) -> str:
+    """Deterministic JSON (sorted keys, no spaces) used for request hashing."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
 
 

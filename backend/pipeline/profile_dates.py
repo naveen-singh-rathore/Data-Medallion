@@ -21,6 +21,8 @@ EXCEL_EPOCH = datetime(1899, 12, 30)  # Excel's day 0 (accounts for its 1900 lea
 
 @dataclass(frozen=True)
 class DateFormat:
+    """One registry date format: id, detection regex, strptime pattern and Postgres pattern."""
+
     label: str
     regex: re.Pattern[str]
     strptime: str | None  # None: numeric `kind`
@@ -66,6 +68,7 @@ def format_by_id(format_id: str) -> DateFormat | None:
 
 
 def format_ids() -> list[str]:
+    """Every registry format id, including the day-first variants."""
     return [label for f in DATE_FORMATS for label in (f.label, f.day_first_label) if label]
 
 
@@ -128,6 +131,8 @@ DATE_FORMATS = (
 
 @dataclass(frozen=True)
 class ParsedDate:
+    """A value parsed with a registry format (or why it could not be)."""
+
     fmt: DateFormat  # matched format; fmt.label is the family (groups DD/MM and MM/DD)
     label: str  # the format the value actually parsed with
     value: datetime | None  # None: shaped like a date but not a valid one

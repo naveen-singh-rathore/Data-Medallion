@@ -170,6 +170,7 @@ def build_silver(run_id: uuid.UUID | str, approved_path: Path | None = None) -> 
 
 
 def latest_build(run_id: uuid.UUID | str) -> dict[str, Any] | None:
+    """The most recent silver build of a run, if any."""
     with transaction() as conn, conn.cursor(row_factory=dict_row) as cur:
         return cur.execute("SELECT * FROM meta.silver_builds WHERE run_id = %s ORDER BY started_at DESC LIMIT 1",
                            (str(run_id),)).fetchone()  # fmt: skip

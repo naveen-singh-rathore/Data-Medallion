@@ -68,6 +68,7 @@ class ClassifyError(PipelineError, RuntimeError):
 
 
 def target_rule(rules: SilverRules, tags: dict[str, str]) -> ColumnRule:
+    """The category column rule to classify: a mapped column tagged 'category' in the context."""
     for c in rules.columns:
         if c.mapping and tags.get(c.source) == "category":
             return c
@@ -75,6 +76,7 @@ def target_rule(rules: SilverRules, tags: dict[str, str]) -> ColumnRule:
 
 
 def labels_for(rule: ColumnRule) -> list[str]:
+    """The closed label list: the rule's standard values plus 'other'."""
     return sorted(set(rule.mapping or {}) | {OTHER})
 
 
@@ -83,6 +85,7 @@ def _norm(text: str) -> str:
 
 
 def text_hash(text: str, labels: list[str], model: str) -> str:
+    """Cache key for one text: task, prompt version, model, label list and text."""
     key = json.dumps([TASK, PROMPT_VERSION, model, labels, text], ensure_ascii=False)
     return hashlib.sha256(key.encode()).hexdigest()
 
@@ -114,6 +117,7 @@ def _rows(run_id: str, rules: SilverRules, rule: ColumnRule, tags: dict[str, str
 
 
 def person_names(run_id: str, rules: SilverRules, tags: dict[str, str]) -> list[str]:
+    """Distinct values of person columns, removed from ticket text before it reaches the model."""
     cols = [c.source for c in rules.columns if tags.get(c.source) in ("person", "contact_pii")]
     if not cols:
         return []
@@ -127,6 +131,7 @@ def person_names(run_id: str, rules: SilverRules, tags: dict[str, str]) -> list[
 
 
 def ticket_text(parts: list[tuple[str, str]], names: list[str]) -> str:
+    """The text the model sees: 'field: value' parts, with emails, phones and names scrubbed."""
     shown = [f"{field}: {scrub_text(_norm(value), names)}" for field, value in parts if value and value.strip()]
     return _norm(" | ".join(shown))
 

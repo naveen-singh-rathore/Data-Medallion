@@ -22,6 +22,7 @@ def clean_block(block: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_uses(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """The tool_use blocks of an assistant message (empty for text-only messages)."""
     content = message.get("content")
     return [b for b in content if b.get("type") == "tool_use"] if isinstance(content, list) else []
 
@@ -83,6 +84,7 @@ def with_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def tool_result(tool_use_id: str, content: str, is_error: bool = False) -> dict[str, Any]:
+    """A tool_result block answering one tool_use; errors are flagged so the model sees them as such."""
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": content}
     if is_error:
         block["is_error"] = True

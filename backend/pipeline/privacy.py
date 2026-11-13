@@ -33,10 +33,12 @@ VOCABULARY = frozenset(
 
 
 def context_tags(context: dict[str, Any] | None) -> dict[str, str]:
+    """Column -> kind tags from a business context draft."""
     return ((context or {}).get("draft") or {}).get("column_tags", {})
 
 
 def is_sensitive(profile: dict[str, Any], tags: dict[str, str]) -> bool:
+    """Tagged person/contact data, or values that look like emails, phones or names."""
     pii = profile["pii_hints"]
     return tags.get(profile["column"]) in SENSITIVE_TAGS or bool(
         pii["email_share"] or pii["phone_share"] or pii["name_matches"]
@@ -44,27 +46,32 @@ def is_sensitive(profile: dict[str, Any], tags: dict[str, str]) -> bool:
 
 
 def is_label_like(profile: dict[str, Any]) -> bool:
+    """Low-cardinality label columns, whose raw values are safe and useful to show."""
     card = profile["cardinality"]
     return (card["role_hint"] in LABEL_ROLES or profile["type_inference"].get("boolean_candidate", False)
             or card["distinct_ratio"] <= CFG.label_like_ratio)  # fmt: skip
 
 
 def column_policy(profile: dict[str, Any], tags: dict[str, str]) -> str:
+    """'raw' for non-sensitive label columns, 'mask' for everything else."""
     return "raw" if is_label_like(profile) and not is_sensitive(profile, tags) else "mask"
 
 
 def column_policies(profiles: list[dict[str, Any]], context: dict[str, Any] | None) -> dict[str, str]:
+    """Column -> 'raw' | 'mask' for a run (what the model may see)."""
     tags = context_tags(context)
     return {p["column"]: column_policy(p, tags) for p in profiles}
 
 
 def is_vocabulary(value: str) -> bool:
+    """Profiler vocabulary (null tokens, sentinels, masks) that passes through masking unchanged."""
     stripped = value.strip()
     return (stripped.lower() in VOCABULARY or stripped in VOCABULARY or is_punctuation_only(stripped)
             or (stripped.startswith("<") and stripped.endswith(">")) or stripped == "")  # fmt: skip
 
 
 def mask_value(value: str) -> str:
+    """A value replaced by its shape, e.g. 'TKT-1234' -> '<AAA-9999>'."""
     return f"<{mask(value.strip())}>"
 
 
@@ -104,6 +111,7 @@ def issue_policy(issue: dict[str, Any], policies: dict[str, str]) -> str:
 
 
 def redact_issue(issue: dict[str, Any], policies: dict[str, str]) -> dict[str, Any]:
+    """An issue with its evidence masked according to the column policies."""
     return issue | {"evidence": redact(issue["evidence"], issue_policy(issue, policies), policies)}
 
 

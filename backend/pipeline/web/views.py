@@ -53,6 +53,7 @@ def _one(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
 
 
 def jsonable(value: Any) -> Any:
+    """Convert datetimes, decimals and UUIDs (recursively) to JSON-friendly values."""
     if isinstance(value, datetime):
         return value.isoformat(sep=" ")
     if isinstance(value, date):
@@ -72,10 +73,12 @@ def jsonable(value: Any) -> Any:
 
 
 def run_row(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """The run's meta.ingestion_runs row."""
     return _one("SELECT * FROM meta.ingestion_runs WHERE run_id = %s", (run_id,))
 
 
 def list_runs(limit: int = 50) -> list[dict[str, Any]]:
+    """Recent runs with their agent, review and build status."""
     return _q(
         """
         SELECT r.run_id, r.source_file, r.status, r.started_at, r.records_parsed, r.rows_loaded_ok,
@@ -353,6 +356,7 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
 
 
 def bronze_view(run_id: uuid.UUID) -> dict[str, Any]:
+    """Bronze funnel, reconciliation, batches, refused rows and repeated rows."""
     run = run_row(run_id) or {}
     batches = _q("SELECT * FROM meta.ingestion_batches WHERE run_id = %s ORDER BY batch_no", (run_id,))
     errors = _q("SELECT source_line, raw_line, error_message FROM bronze.load_errors WHERE run_id = %s"
@@ -375,6 +379,7 @@ def bronze_view(run_id: uuid.UUID) -> dict[str, Any]:
 
 
 def bronze_rows(run_id: uuid.UUID, status: str | None, offset: int, limit: int, search: str | None) -> dict[str, Any]:
+    """Bronze rows (paged), filtered by parse status and text."""
     where = [sql.SQL("run_id = %(run)s")]
     params: dict[str, Any] = {"run": run_id, "limit": min(limit, 200), "offset": max(offset, 0)}
     if status in ("ok", "malformed"):
@@ -400,6 +405,7 @@ def bronze_rows(run_id: uuid.UUID, status: str | None, offset: int, limit: int, 
 
 
 def profile_view(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """The dataset profile with issues explained, or None before profiling."""
     try:
         profile = load_profile(run_id)
     except (LookupError, TypeError, ValueError):
@@ -428,6 +434,7 @@ def profile_view(run_id: uuid.UUID) -> dict[str, Any] | None:
 
 
 def column_profile(run_id: uuid.UUID, column: str) -> dict[str, Any] | None:
+    """One column's stored profile."""
     row = _one("SELECT profile FROM meta.column_profiles WHERE run_id = %s AND column_name = %s", (run_id, column))
     return row["profile"] if row else None
 
@@ -436,6 +443,7 @@ def column_profile(run_id: uuid.UUID, column: str) -> dict[str, Any] | None:
 
 
 def context_view(run_id: uuid.UUID) -> dict[str, Any]:
+    """Context rows (person / AI) with the cost of the AI draft."""
     rows = _q(
         """SELECT c.source, c.approved, c.text, c.draft, c.created_at, l.model, l.input_tokens, l.output_tokens,
                   l.cost_usd, l.cache_hit
@@ -449,6 +457,7 @@ def context_view(run_id: uuid.UUID) -> dict[str, Any]:
 
 
 def card_view(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """The latest card with its metrics."""
     card = latest_card(run_id)
     if not card:
         return None
@@ -508,6 +517,7 @@ def agent_transcript(run_id: uuid.UUID) -> list[dict[str, Any]]:
 
 
 def agent_view(run_id: uuid.UUID) -> dict[str, Any]:
+    """Agent status, readable transcript, tool calls and LLM usage."""
     metrics = _one("SELECT * FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,))
     tool_calls = _q("SELECT tool, args, ok, error, latency_ms, result_bytes, created_at FROM meta.tool_calls"
                     " WHERE run_id = %s ORDER BY created_at DESC LIMIT 40", (run_id,))  # fmt: skip
@@ -534,6 +544,7 @@ def _rel(path: Path) -> str:
 
 
 def rules_view(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """Rules explained for the review page, with per-rule decisions and leftover values."""
     rules, state, path = current_rules(run_id)
     if path is None:
         return None
@@ -600,6 +611,8 @@ def rules_view(run_id: uuid.UUID) -> dict[str, Any] | None:
 
 @dataclass
 class Preview:
+    """A silver preview computed from the current rules (cached per rules hash)."""
+
     rules: SilverRules
     state: str
     rules_hash: str
@@ -651,6 +664,7 @@ def silver_preview(run_id: uuid.UUID) -> Preview | None:
 
 
 def is_cached(run_id: uuid.UUID) -> bool:
+    """Whether the silver preview for the current rules is already computed."""
     rules, _, _ = current_rules(run_id)
     return rules is not None and any(k[:2] == (str(run_id), rules_hash(rules)) for k in _cache)
 
@@ -688,6 +702,7 @@ def _row_status(row: dict[str, Any]) -> str:
 
 
 def silver_summary(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """Silver counts by status and per-column before/after stats."""
     preview = silver_preview(run_id)
     if preview is None:
         return None
@@ -733,6 +748,7 @@ def silver_summary(run_id: uuid.UUID) -> dict[str, Any] | None:
 
 
 def silver_rows(run_id: uuid.UUID, show: str, column: str | None, offset: int, limit: int) -> dict[str, Any] | None:
+    """Silver rows (paged) for the before/after table."""
     preview = silver_preview(run_id)
     if preview is None:
         return None
@@ -817,6 +833,7 @@ def gold_state(run_id: uuid.UUID) -> tuple[dict[str, Any] | None, bool]:
 
 
 def gold_view(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """Gold findings, KPIs with coverage, marts and reconciliation checks."""
     g, current = gold_state(run_id)
     if not g:
         return None

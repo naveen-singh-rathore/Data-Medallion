@@ -56,6 +56,8 @@ ROLE_CODES = {"candidate_key": "key", "categorical": "cat", "free_text": "text",
 
 @dataclass(frozen=True)
 class CardInputs:
+    """Everything the card is rendered from (profile, context, policies), so rendering stays pure."""
+
     run_id: str
     source_file: str
     context: dict[str, Any] | None  # meta.dataset_context row
@@ -67,12 +69,15 @@ class CardInputs:
 
 @dataclass(frozen=True)
 class CardResult:
+    """Rendered card text, its hash (cache key) and size/coverage metrics."""
+
     text: str
     card_hash: str
     metrics: dict[str, Any]
 
 
 def estimate_tokens(text: str, chars_per_token: float | None = None) -> int:
+    """Token estimate from characters (exact counts come from the provider with --exact)."""
     return math.ceil(len(text) / (chars_per_token or settings.card_chars_per_token))
 
 
@@ -134,6 +139,7 @@ def column_line(p: dict[str, Any], codes: list[str], tag: str | None) -> str:
 
 
 def context_lines(context: dict[str, Any] | None) -> list[str]:
+    """The business-context section of the card (or a 'none' line)."""
     if not context:
         return ["Context: none (run `context` to add or draft one)"]
     if context["source"] == "human":
@@ -144,6 +150,7 @@ def context_lines(context: dict[str, Any] | None) -> list[str]:
 
 
 def header_lines(inputs: CardInputs) -> list[str]:
+    """Tier 0 of the card: dataset size, duplicates, partial rows, profiler version."""
     s = inputs.summary
     partial = s.get("partial_rows", {}).get("count", 0)
     prof = inputs.profiler or {}
@@ -172,6 +179,8 @@ def _names(names: list[str]) -> str:
 
 
 def column_pointer(kind: str) -> Callable[[list[Any]], str]:
+    """A line that points at columns left out of the card, and the tool that returns them."""
+
     def pointer(rest: list[Any]) -> str:
         names = [p["column"] for p, _ in rest]
         more = "more " if kind == "flagged" else ""
@@ -181,6 +190,8 @@ def column_pointer(kind: str) -> Callable[[list[Any]], str]:
 
 
 def issue_pointer(severity: str) -> Callable[[list[Any]], str]:
+    """A line that points at issues of one severity left out of the card."""
+
     def pointer(rest: list[Any]) -> str:
         columns = {c for issue in rest for c in _issue_columns(issue)}
         return (
@@ -313,6 +324,7 @@ def build_card(inputs: CardInputs, budget_tokens: int, chars_per_token: float | 
 
 
 def load_inputs(run_id: uuid.UUID) -> CardInputs:
+    """Read the stored profile, context and privacy policies of a run into CardInputs."""
     from pipeline.context import get_context  # local: context imports the LLM client
     from pipeline.profiling import load_profile
 
@@ -389,6 +401,7 @@ def _exact_tokens(text: str, run_id: uuid.UUID) -> int | None:
 
 
 def latest_card(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """The most recently rendered card of a run, if any."""
     with transaction() as conn:
         cur = conn.execute(
             "SELECT * FROM meta.dataset_cards WHERE run_id = %s ORDER BY created_at DESC LIMIT 1", (run_id,)
