@@ -52,7 +52,7 @@ function rv(v) {
   return h`<span title="${s}">${m[1] ? h`<span class="ws" title="leading spaces">${"␣".repeat(m[1].length)}</span>` : ""}${shown}${m[3] ? h`<span class="ws" title="trailing spaces">${"␣".repeat(m[3].length)}</span>` : ""}</span>`;
 }
 
-const kpi = (value, label, tone = "") => h`<div class="kpi ${tone}"><div class="v">${value}</div><div class="l">${label}</div></div>`;
+const kpi = (value, label, tone = "") => h`<div class="kpi ${tone}"><div class="v">${value}${tone === "unreliable" ? h`<span class="badge-unreliable" title="A data-quality finding says this number is not meaningful for this file">unreliable</span>` : ""}</div><div class="l">${label}</div></div>`;
 const bar = (parts) => h`<div class="bar">${parts.filter((p) => p[0] > 0).map(([share, tone, title]) => h`<span class="${tone}" style="width:${Math.max(0, Math.min(100, share * 100)).toFixed(2)}%" title="${title || ""}"></span>`)}</div>`;
 const loading = (text = "Loading…") => h`<div class="loading"><span class="spinner"></span>${text}</div>`;
 const sevPill = (s) => h`<span class="pill ${s}">${s}</span>`;
@@ -687,6 +687,10 @@ async function loadRuleEffects() {
         <button class="btn link small" data-act="silvercol" data-col="${it.rule.name}">See every value and what it becomes →</button>
         ${c.leftovers.length ? leftoverChooser(it, Number(el.dataset.effect), c.leftovers) : ""}` : h`<span class="muted">Not in the preview.</span>`;
       reviewState.leftovers[it.rule.name] = c ? c.leftovers : [];
+    } else if (it.kind === "row_check" && it.rule.kind === "swapped_columns") {
+      html = h`<b>${num(s.row_fixes?.swapped_columns || 0)}</b> of ${num(n)} rows have their two columns swapped back.`;
+    } else if (it.kind === "row_check" && it.rule.kind === "declared_duplicate") {
+      html = h`<b>${num(s.row_fixes?.declared_duplicate || 0)}</b> of ${num(n)} tickets say they duplicate another; they are kept but not counted.`;
     } else if (it.kind === "row_check") {
       const e = errs[it.rule.error_key];
       html = h`<b>${num(e ? e.count : 0)}</b> of ${num(n)} rows fail this check (${pct((e ? e.count : 0) / n)}).`;
@@ -895,17 +899,17 @@ PANELS.gold = async (ov, stage) => {
     <div class="grid">
       ${kpi(num(k.tickets), "tickets")}
       ${kpi(num(k.resolved), `resolved (${rate(k.resolved, k.tickets)})`)}
-      ${kpi(hrs(k.median_hours), `median time to resolve · based on ${num(k.usable)} of ${num(k.resolved)} resolved (${rate(k.usable, k.resolved)})`, datesBad ? "bad" : "")}
-      ${kpi(rate(k.sla_met, k.sla_measured), `SLA met · ${num(k.sla_measured)} tickets measurable`, datesBad ? "bad" : "")}
+      ${kpi(hrs(k.median_hours), `median time to resolve · based on ${num(k.usable)} of ${num(k.resolved)} resolved (${rate(k.usable, k.resolved)})`, datesBad ? "unreliable" : "")}
+      ${kpi(rate(k.sla_met, k.sla_measured), `SLA met · ${num(k.sla_measured)} tickets measurable`, datesBad ? "unreliable" : "")}
       ${g.escalation ? kpi(rate(k.escalated, k.tickets), "currently escalated") : ""}
       ${kpi(`$${num(Math.round(k.total_cost || 0))}`, `repair cost · ${num(k.with_cost)} of ${num(k.tickets)} tickets have a cost (${rate(k.with_cost, k.tickets)})`)}
     </div>
     ${datesBad ? h`<div class="callout bad small"><b>Time metrics are shown for completeness but are not meaningful for this file:</b> ${datesBad.impact}</div>` : ""}
     <div class="stack-sm"><h4>Resolution time and SLA by priority</h4>
-      <div class="table-wrap"><table><thead><tr><th>Priority</th><th class="num">Tickets</th><th class="num">Resolved</th><th class="num">Used for time</th><th class="num">Excluded</th><th>Coverage</th><th class="num">Median</th><th class="num">90th pct</th><th class="num">SLA met</th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Priority</th><th class="num">Tickets</th><th class="num">Resolved</th><th class="num">Used for time</th><th class="num">Excluded</th><th>Coverage</th><th class="num ${datesBad ? "unreliable" : ""}">Median</th><th class="num ${datesBad ? "unreliable" : ""}">90th pct</th><th class="num ${datesBad ? "unreliable" : ""}">SLA met${datesBad ? h`<span class="badge-unreliable">unreliable</span>` : ""}</th></tr></thead><tbody>
       ${g.by_priority.map((p) => h`<tr><td><b>${p.priority}</b></td><td class="num">${num(p.tickets)}</td><td class="num">${num(p.resolved)}</td><td class="num">${num(p.usable)}</td>
         <td class="num">${num(p.excluded)}</td><td style="min-width:120px"><div class="row" style="gap:6px;flex-wrap:nowrap">${bar([[p.resolved ? p.usable / p.resolved : 0, "ok"]])}<span class="small">${rate(p.usable, p.resolved)}</span></div></td>
-        <td class="num">${hrs(p.median_hours)}</td><td class="num">${hrs(p.p90_hours)}</td><td class="num">${rate(p.sla_met, p.sla_measured)} <span class="faint small">of ${num(p.sla_measured)}</span></td></tr>`)}
+        <td class="num ${datesBad ? "unreliable" : ""}">${hrs(p.median_hours)}</td><td class="num ${datesBad ? "unreliable" : ""}">${hrs(p.p90_hours)}</td><td class="num ${datesBad ? "unreliable" : ""}">${rate(p.sla_met, p.sla_measured)} <span class="faint small">of ${num(p.sla_measured)}</span></td></tr>`)}
       </tbody></table></div>
       <p class="small muted">Time metrics use only resolved tickets with both dates in the right order ("used for time"); excluded = resolved tickets with a missing or impossible date. Rows with warnings are counted as tickets.</p></div>
     <div class="stack-sm"><h4>Volume and backlog by month</h4>${volumeChart(monthly)}
@@ -927,20 +931,27 @@ PANELS.gold = async (ov, stage) => {
 
 function volumeChart(months) {
   if (!months.length) return h`<p class="muted">No dated tickets.</p>`;
-  const W = 760, H = 220, pad = 30, n = months.length, bw = (W - pad * 2) / n;
-  const maxV = Math.max(1, ...months.map((m) => Math.max(Number(m.opened), Number(m.closed), Number(m.backlog || 0))));
-  const y = (v) => H - pad - (Number(v) / maxV) * (H - pad * 2);
-  const line = months.map((m, i) => `${pad + bw * i + bw / 2},${y(m.backlog || 0)}`).join(" ");
-  return h`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Tickets opened, closed and open backlog per month">
-    <line x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}" style="stroke:var(--border)"/>
-    ${months.map((m, i) => h`<g><title>${String(m.month).slice(0, 7)}: opened ${m.opened}, closed ${m.closed}, open at end ${m.backlog}</title>
-      <rect x="${pad + bw * i + bw * 0.1}" y="${y(m.opened)}" width="${bw * 0.38}" height="${H - pad - y(m.opened)}" style="fill:var(--accent)"/>
-      <rect x="${pad + bw * i + bw * 0.52}" y="${y(m.closed)}" width="${bw * 0.38}" height="${H - pad - y(m.closed)}" style="fill:var(--ok)"/>
-      ${i % Math.ceil(n / 8) === 0 ? h`<text x="${pad + bw * i + bw / 2}" y="${H - pad + 16}" text-anchor="middle" style="fill:var(--muted);font-size:11px">${String(m.month).slice(0, 7)}</text>` : ""}</g>`)}
+  // Two scales: monthly flows (bars, left axis) are ~10x smaller than the cumulative backlog (line, right axis).
+  const W = 760, H = 240, padL = 44, padR = 52, padT = 18, padB = 30, n = months.length, bw = (W - padL - padR) / n;
+  const nice = (v) => { const p = 10 ** Math.floor(Math.log10(Math.max(v, 1))); return Math.ceil(v / p) * p; };
+  const maxFlow = nice(Math.max(1, ...months.map((m) => Math.max(Number(m.opened), Number(m.closed)))));
+  const maxBack = nice(Math.max(1, ...months.map((m) => Number(m.backlog || 0))));
+  const yF = (v) => H - padB - (Number(v) / maxFlow) * (H - padT - padB);
+  const yB = (v) => H - padB - (Number(v) / maxBack) * (H - padT - padB);
+  const ticks = [0, 0.5, 1];
+  const line = months.map((m, i) => `${padL + bw * i + bw / 2},${yB(m.backlog || 0)}`).join(" ");
+  return h`<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:520px;height:auto" role="img" aria-label="Tickets opened and closed per month (left axis) and open backlog at month end (right axis)">
+    ${ticks.map((t) => h`<line x1="${padL}" x2="${W - padR}" y1="${yF(maxFlow * t)}" y2="${yF(maxFlow * t)}" style="stroke:var(--border)"/>
+      <text x="${padL - 6}" y="${yF(maxFlow * t) + 4}" text-anchor="end" style="fill:var(--accent);font-size:11px">${num(maxFlow * t)}</text>
+      <text x="${W - padR + 6}" y="${yB(maxBack * t) + 4}" style="fill:var(--warn);font-size:11px">${num(maxBack * t)}</text>`)}
+    ${months.map((m, i) => h`<g><title>${String(m.month).slice(0, 7)}: opened ${num(m.opened)}, closed ${num(m.closed)}, open at end ${num(m.backlog)}</title>
+      <rect x="${padL + bw * i + bw * 0.1}" y="${yF(m.opened)}" width="${bw * 0.38}" height="${H - padB - yF(m.opened)}" style="fill:var(--accent)"/>
+      <rect x="${padL + bw * i + bw * 0.52}" y="${yF(m.closed)}" width="${bw * 0.38}" height="${H - padB - yF(m.closed)}" style="fill:var(--ok)"/>
+      ${i % Math.ceil(n / 8) === 0 ? h`<text x="${padL + bw * i + bw / 2}" y="${H - padB + 16}" text-anchor="middle" style="fill:var(--muted);font-size:11px">${String(m.month).slice(0, 7)}</text>` : ""}</g>`)}
     <polyline points="${line}" style="fill:none;stroke:var(--warn);stroke-width:2"/>
-    <text x="${pad}" y="${pad - 10}" style="fill:var(--muted);font-size:11px">max ${num(maxV)}</text>
-  </svg>
-  <div class="small row"><span style="color:var(--accent)">■ opened</span><span style="color:var(--ok)">■ closed</span><span style="color:var(--warn)">— open at month end</span></div>`;
+  </svg></div>
+  <div class="small row"><span style="color:var(--accent)">■ opened</span><span style="color:var(--ok)">■ closed</span><span class="muted">(left axis, per month)</span>
+    <span style="color:var(--warn)">— open at month end</span><span class="muted">(right axis)</span></div>`;
 }
 
 // --- drawers ------------------------------------------------------------------------------------

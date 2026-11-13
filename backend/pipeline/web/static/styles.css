@@ -118,6 +118,11 @@ main { max-width: 1320px; margin: 0 auto; padding: 24px; }
 .kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .kpi .l { font-size: 12.5px; color: var(--muted); }
 .kpi.ok .v { color: var(--ok); } .kpi.warn .v { color: var(--warn); } .kpi.bad .v { color: var(--bad); }
+.kpi.unreliable { background: repeating-linear-gradient(135deg, var(--surface-2) 0 8px, var(--surface) 8px 16px); border: 1px dashed var(--border); }
+.kpi.unreliable .v { color: var(--faint); }
+.badge-unreliable { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 650; vertical-align: middle;
+  color: var(--bad); border: 1px solid var(--bad); text-transform: uppercase; letter-spacing: .04em; }
+td.unreliable, th.unreliable { color: var(--faint); }
 
 .bar { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; display: flex; min-width: 60px; }
 .bar > span { display: block; height: 100%; }
