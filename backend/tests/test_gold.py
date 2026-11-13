@@ -122,7 +122,10 @@ def test_metric_contracts_match_hand_computed_answers(gold_run, conn) -> None:
 
     vol = {(str(r["month"])[:7] if r["month"] else None, r["category"], r["building"]): r
            for r in rows(conn, "SELECT * FROM G.volume_backlog")}  # fmt: skip
-    pick = lambda k: (vol[k]["opened"], vol[k]["closed"], vol[k]["closed_date_unknown"], vol[k]["open_at_month_end"])
+
+    def pick(k: tuple) -> tuple:
+        return vol[k]["opened"], vol[k]["closed"], vol[k]["closed_date_unknown"], vol[k]["open_at_month_end"]
+
     assert pick(("2024-01", "hvac", "B1")) == (3, 3, 0, 0)
     assert pick(("2024-01", "hvac", "B2")) == (1, 0, 0, 1) and pick(("2024-02", "hvac", "B2")) == (0, 0, 0, 1)
     assert pick(("2024-02", "plumbing", "B1")) == (1, 0, 1, 0)

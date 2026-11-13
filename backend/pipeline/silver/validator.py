@@ -187,14 +187,13 @@ def _reference_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
     errors = []
     types = {c.name: c.type for c in rules.columns}
     if rules.dedup:
-        for col in [*rules.dedup.key, *([rules.dedup.order_by] if rules.dedup.order_by else [])]:
-            if col not in types:
-                errors.append(f"dedup: {col!r} is not a target column")
+        dedup_cols = [*rules.dedup.key, *([rules.dedup.order_by] if rules.dedup.order_by else [])]
+        errors.extend(f"dedup: {col!r} is not a target column" for col in dedup_cols if col not in types)
     for i, check in enumerate(rules.row_checks):
         cols = [str(check.params[k]) for k in ROW_CHECK_COLUMNS[check.kind]]
-        for col in cols:
-            if col not in types:
-                errors.append(f"row_checks[{i}] ({check.kind}): {col!r} is not a target column")
+        errors.extend(
+            f"row_checks[{i}] ({check.kind}): {col!r} is not a target column" for col in cols if col not in types
+        )
         if check.kind == "swapped_columns" and all(c in types for c in cols):
             a = next(c for c in rules.columns if c.name == cols[0])
             if not a.mapping:
@@ -306,9 +305,11 @@ def _stat_warnings(rules: SilverRules, stats: dict[str, Any]) -> list[str]:
             f"rows: {stats['rows']['with_errors']:.1%} of sampled rows have errors (> {WARN_ROWS_WITH_ERRORS:.0%})"
         )
     asked = {i for q in rules.needs_human for i in q.issue_ids}
-    for c in rules.columns:
-        if c.confidence < WARN_CONFIDENCE and not (set(c.addresses) & asked):
-            warnings.append(f"{c.name}: confidence {c.confidence} < {WARN_CONFIDENCE} without a needs_human question")
+    warnings.extend(
+        f"{c.name}: confidence {c.confidence} < {WARN_CONFIDENCE} without a needs_human question"
+        for c in rules.columns
+        if c.confidence < WARN_CONFIDENCE and not (set(c.addresses) & asked)
+    )
     return warnings
 
 

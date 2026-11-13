@@ -67,7 +67,7 @@ def test_replay_returns_cached_response_with_zero_network(version) -> None:
 
 
 def test_replay_cache_miss_is_a_clear_error_and_is_logged(conn, version) -> None:
-    with pytest.raises(LLMCacheMiss, match="replay mode: no cached response .* LLM_MODE=live or record"):
+    with pytest.raises(LLMCacheMiss, match=r"replay mode: no cached response .* LLM_MODE=live or record"):
         call_llm("test", "claude-haiku-5-5", MESSAGES, version, None, mode="replay", client=ExplodingClient())
     row = conn.execute("SELECT status, error FROM meta.llm_calls WHERE prompt_version = %s", (version,)).fetchone()
     assert row["status"] == "error" and "replay mode" in row["error"]

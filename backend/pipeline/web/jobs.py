@@ -6,7 +6,6 @@ last error. It is per process: after a restart the views still show everything t
 """
 
 import threading
-import traceback
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -63,10 +62,10 @@ def _start(run_id: uuid.UUID | str, kind: str, work: Callable[[Job], None]) -> d
         try:
             work(job)
             job.state = "done"
-        except Exception as exc:  # noqa: BLE001 - shown in the UI, also logged
+        except Exception as exc:
             job.state, job.error = "error", f"{type(exc).__name__}: {str(exc)[:500]}"
             job.log(job.step, job.error, "error")
-            log.error("job failed", kind=kind, step=job.step, error=job.error, trace=traceback.format_exc()[-1500:])
+            log.exception("job failed", kind=kind, step=job.step, error=job.error)
         finally:
             job.finished_at = datetime.now(UTC).isoformat()
 

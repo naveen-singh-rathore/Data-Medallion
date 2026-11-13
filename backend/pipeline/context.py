@@ -14,11 +14,12 @@ import string
 import uuid
 from typing import Any, Literal
 
+from psycopg import sql
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
 
 from pipeline.config import settings
-from pipeline.db import transaction
+from pipeline.db import column_list, transaction
 from pipeline.llm import LLMError, call_llm
 from pipeline.logging_setup import get_logger
 from pipeline.privacy import column_policies, minimize
@@ -226,11 +227,11 @@ _FIELDS = ("text", "draft", "source", "approved", "llm_call_id")
 def get_context(run_id: uuid.UUID, source: str | None = None) -> dict[str, Any] | None:
     """The context to use (human over inferred), or the row for one `source`."""
     with transaction() as conn:
-        row = conn.execute(
-            f"SELECT {', '.join(_FIELDS)} FROM meta.dataset_context WHERE run_id = %s"
-            " AND (%s::text IS NULL OR source = %s) ORDER BY source = 'human' DESC LIMIT 1",
-            (run_id, source, source),
-        ).fetchone()
+        query = sql.SQL(
+            "SELECT {} FROM meta.dataset_context WHERE run_id = %s"
+            " AND (%s::text IS NULL OR source = %s) ORDER BY source = 'human' DESC LIMIT 1"
+        ).format(column_list(_FIELDS))
+        row = conn.execute(query, (run_id, source, source)).fetchone()
     return dict(zip(_FIELDS, row, strict=True)) if row else None
 
 

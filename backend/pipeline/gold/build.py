@@ -314,7 +314,7 @@ def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Pat
             conn.execute("UPDATE meta.gold_builds SET status = 'failed', error_message = %s, finished_at = %s, duration_ms = %s"
                          " WHERE build_id = %s", (f"{type(exc).__name__}: {str(exc)[:1000]}", datetime.now(UTC),
                                                   int((time.perf_counter() - started) * 1000), build_id))  # fmt: skip
-        log.error("gold build failed", build_id=str(build_id), error=str(exc)[:300])
+        log.exception("gold build failed", build_id=str(build_id), error=str(exc)[:300])
         raise
     log.info("gold build done", build_id=str(build_id), duration_ms=duration, **counts)
     return latest_gold(run_id)  # type: ignore[return-value]

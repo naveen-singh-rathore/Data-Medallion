@@ -26,7 +26,7 @@ def tool_uses(message: dict[str, Any]) -> list[dict[str, Any]]:
     return [b for b in content if b.get("type") == "tool_use"] if isinstance(content, list) else []
 
 
-def summarize_result(tool: str, content: str) -> str:
+def summarize_result(content: str) -> str:
     """One line from a tool result, by code: error text, or the top-level numbers and list sizes."""
     try:
         data = json.loads(content)
@@ -64,7 +64,7 @@ def compact(messages: list[dict[str, Any]], keep: int = KEEP_FULL) -> list[dict[
         # sort_keys: tool inputs come back from the jsonb cache with reordered keys in replay mode;
         # anything rendered from them must not depend on key order, or request hashes diverge.
         args_text = json.dumps(args, ensure_ascii=False, separators=(",", ":"), sort_keys=True)[:120]
-        block["content"] = f"{STUB_PREFIX} {name}({args_text}) → {summarize_result(name, block.get('content', ''))}"
+        block["content"] = f"{STUB_PREFIX} {name}({args_text}) → {summarize_result(block.get('content', ''))}"
     return result
 
 

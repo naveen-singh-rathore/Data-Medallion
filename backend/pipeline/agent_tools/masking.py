@@ -6,7 +6,7 @@ from pipeline.privacy import column_policy, is_vocabulary
 from pipeline.profile_columns import mask
 
 
-def mask_value(column: str, value: Any, context_tags: dict[str, str], profile: dict[str, Any]) -> Any:
+def mask_value(value: Any, context_tags: dict[str, str], profile: dict[str, Any]) -> Any:
     """`value` as a tool may show it. Masked columns (person/contact_pii tags, PII hints, or
     non-label-like high-cardinality data) become `<pattern>(length)`; profiler vocabulary
     (null tokens, sentinels, ...) and non-strings pass through."""

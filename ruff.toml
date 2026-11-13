@@ -28,6 +28,9 @@ select = [
 ignore = [
     "E501",     # line length is the formatter's job
     "TRY003",   # messages are written at the raise site on purpose (they reach the UI)
+    "TRY301",   # builds raise reconciliation errors inside their transaction so the failure path records them
+    "S311",     # `random` is only used for seeded, reproducible sampling; nothing security-related
+    "RUF001", "RUF003",  # `×` and `–` are intentional in text shown to people and to the model
     "D105",     # magic methods
     "D107",     # __init__ (documented on the class)
 ]
@@ -40,4 +43,6 @@ max-returns = 8
 max-branches = 14
 
 [lint.per-file-ignores]
-"backend/tests/**" = ["S101", "S608", "S311", "D1", "ANN", "ARG", "PLR", "C90"]
+# Source timestamps carry no zone: profiling and date parsing compare wall-clock values on purpose.
+"backend/pipeline/profile_dates.py" = ["DTZ001", "DTZ007"]
+"backend/tests/**" = ["S101", "S105", "S608", "D1", "ANN", "ARG", "PLR", "C90", "DTZ001", "DTZ007"]

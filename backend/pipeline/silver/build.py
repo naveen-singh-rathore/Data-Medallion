@@ -111,10 +111,10 @@ def build_silver(run_id: uuid.UUID | str, approved_path: Path | None = None) -> 
             conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
             conn.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(staging))
             conn.execute(sql.SQL(
-                "CREATE TABLE {} AS SELECT c.*, " + STATUS_SQL + " AS _status, b.source_line AS _source_line,"
+                "CREATE TABLE {} AS SELECT c.*, {} AS _status, b.source_line AS _source_line,"
                 " %(build_id)s::uuid AS _build_id, %(run_id)s::uuid AS _run_id"
-                " FROM ({}) AS c JOIN bronze.records b ON b.bronze_id = c.bronze_id").format(staging, compiled.query),
-                compiled.params | {"build_id": build_id})  # fmt: skip
+                " FROM ({}) AS c JOIN bronze.records b ON b.bronze_id = c.bronze_id"
+            ).format(staging, sql.SQL(STATUS_SQL), compiled.query), compiled.params | {"build_id": build_id})  # fmt: skip
             from pipeline.silver.classify import (
                 apply_ai_labels,  # AI labels survive every rebuild
             )
@@ -160,7 +160,7 @@ def build_silver(run_id: uuid.UUID | str, approved_path: Path | None = None) -> 
                          " duration_ms = %s WHERE build_id = %s",
                          (f"{type(exc).__name__}: {str(exc)[:1000]}", datetime.now(UTC),
                           int((time.perf_counter() - started) * 1000), build_id))  # fmt: skip
-        log.error("silver build failed", build_id=str(build_id), error=str(exc)[:300])
+        log.exception("silver build failed", build_id=str(build_id), error=str(exc)[:300])
         raise
     result = latest_build(run_id)
     log.info("silver build done", build_id=str(build_id), target=rules.target_table,

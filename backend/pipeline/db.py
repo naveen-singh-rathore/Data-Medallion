@@ -1,12 +1,30 @@
 """Postgres connection helpers (plain psycopg 3, no ORM)."""
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 
 import psycopg
 from psycopg import sql
 
 from pipeline.config import settings
+
+
+def table(qualified: str) -> sql.Identifier:
+    """`schema.table` as a quoted identifier."""
+    return sql.Identifier(*qualified.split("."))
+
+
+def column_list(names: Iterable[str]) -> sql.Composed:
+    """A comma-separated list of quoted column names."""
+    return sql.SQL(", ").join(map(sql.Identifier, names))
+
+
+def insert_sql(qualified_table: str, names: Sequence[str], suffix: sql.Composable | None = None) -> sql.Composed:
+    """`INSERT INTO t (cols) VALUES (%s, ...)` plus an optional suffix (e.g. ON CONFLICT ...)."""
+    query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+        table(qualified_table), column_list(names), sql.SQL(", ").join(sql.Placeholder() * len(names))
+    )
+    return query + suffix if suffix is not None else query
 
 
 def get_conn() -> psycopg.Connection:

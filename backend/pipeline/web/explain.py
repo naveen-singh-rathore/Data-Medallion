@@ -220,7 +220,7 @@ ROW_ACTIONS = {
 
 
 def describe_row_check(check: dict[str, Any]) -> str:
-    rule = ROW_CHECKS.get(check["kind"], lambda p: check["kind"])(check["params"])
+    rule = ROW_CHECKS.get(check["kind"], lambda _params: check["kind"])(check["params"])
     link = "; then" if check["action"] in ("swap", "duplicate") or check["kind"] == "junk_row" else "; otherwise"
     return f"{rule[0].upper()}{rule[1:]}{link} {ROW_ACTIONS.get(check['action'], check['action'])}."
 

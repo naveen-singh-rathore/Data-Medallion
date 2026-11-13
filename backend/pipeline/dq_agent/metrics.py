@@ -2,10 +2,11 @@
 
 from typing import Any
 
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from pipeline.config import settings
-from pipeline.db import transaction
+from pipeline.db import insert_sql, transaction
 from pipeline.dq_agent.prompts import PROMPT_VERSION
 
 COLUMNS = ("thread_id", "run_id", "status", "model", "prompt_version", "turns", "tool_calls", "tool_calls_by_name",
@@ -31,6 +32,7 @@ def rules_counts(rules: dict[str, Any] | None, required: list[str]) -> dict[str,
 
 
 def write_agent_run(state: dict[str, Any], status: str, **extra: Any) -> None:
+    """Upsert the thread's row in meta.agent_runs from the graph state (cost, turns, coverage, status)."""
     row = {
         "thread_id": state["thread_id"], "run_id": state["run_id"], "status": status, "model": settings.main_model,
         "prompt_version": PROMPT_VERSION, "turns": state.get("turns", 0), "tool_calls": state.get("tool_calls", 0),
@@ -41,16 +43,16 @@ def write_agent_run(state: dict[str, Any], status: str, **extra: Any) -> None:
         "warnings": (state.get("validation") or {}).get("warnings"),
     } | rules_counts(state.get("proposed_rules"), state.get("required_ids", [])) | extra  # fmt: skip
     values = [Jsonb(row.get(c)) if c in JSON_COLUMNS and row.get(c) is not None else row.get(c) for c in COLUMNS]
-    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in COLUMNS if c != "thread_id")
+    updates = sql.SQL(", ").join(
+        sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c)) for c in COLUMNS if c != "thread_id"
+    )
+    upsert = sql.SQL(" ON CONFLICT (thread_id) DO UPDATE SET {}, updated_at = now()").format(updates)
     with transaction() as conn:
-        conn.execute(
-            f"INSERT INTO meta.agent_runs ({', '.join(COLUMNS)}) VALUES ({', '.join(['%s'] * len(COLUMNS))})"
-            f" ON CONFLICT (thread_id) DO UPDATE SET {updates}, updated_at = now()",
-            values,
-        )
+        conn.execute(insert_sql("meta.agent_runs", COLUMNS, upsert), values)
 
 
 def latest_agent_run(run_id: str) -> dict[str, Any] | None:
+    """The most recently updated agent_runs row for a run, if any."""
     with transaction() as conn:
         cur = conn.execute(
             "SELECT * FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,)

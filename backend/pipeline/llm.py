@@ -21,7 +21,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from pipeline.config import settings
-from pipeline.db import transaction
+from pipeline.db import insert_sql, transaction
 from pipeline.logging_setup import get_logger
 
 MAX_TOKENS = 16_000  # includes (adaptive) thinking tokens; non-streaming stays under SDK timeouts
@@ -149,12 +149,9 @@ def _store_cache(request_hash_: str, model: str, response: dict[str, Any]) -> No
 
 
 def _log_call(row: dict[str, Any]) -> None:
-    columns = ", ".join(row)
+    """Append one row to meta.llm_calls (every call, hit or miss, success or error)."""
     with transaction() as conn:
-        conn.execute(
-            f"INSERT INTO meta.llm_calls ({columns}) VALUES ({', '.join(['%s'] * len(row))})",
-            list(row.values()),
-        )
+        conn.execute(insert_sql("meta.llm_calls", list(row)), list(row.values()))
 
 
 def call_llm(
@@ -201,7 +198,8 @@ def call_llm(
     except Exception as exc:
         _log_call(base | {"status": "error", "error": str(exc)[:1000], "cache_hit": False,
                           "latency_ms": int((time.perf_counter() - started) * 1000)})  # fmt: skip
-        log.error("llm call failed", purpose=purpose, model=model, mode=mode, error=str(exc)[:200])
+        # Expected failures (cache miss, provider 5xx after retries): one line, no traceback; the caller decides.
+        log.error("llm call failed", purpose=purpose, model=model, mode=mode, error=str(exc)[:200])  # noqa: TRY400
         raise
     usage = response.get("usage") or {}
     spent = Decimal(0) if cache_hit else cost_usd(model, usage)

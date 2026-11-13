@@ -40,7 +40,7 @@ def tool_schemas() -> list[dict[str, Any]]:
     """LLM tool definitions (name, description, input_schema) - generated from TOOLS only."""
     # dict(...) rather than a literal: "description" is also a common dataset column name, and the
     # generic test forbids dataset column names as string literals anywhere in pipeline code.
-    return [dict(name=name, description=desc, input_schema=model.model_json_schema())  # noqa: C408
+    return [dict(name=name, description=desc, input_schema=model.model_json_schema())
             for name, (_, model, desc) in TOOLS.items()]  # fmt: skip
 
 

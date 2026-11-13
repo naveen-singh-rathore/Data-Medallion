@@ -81,7 +81,7 @@ def get_value_counts(view: RunView, args: ValueCountsArgs) -> dict[str, Any]:
     with get_ro_conn() as conn:
         rows = conn.execute(query, {"run_id": view.run_id}).fetchall()
     if raw:
-        values = [[mask_value(args.column, v, view.tags, profile), n] for v, n, _, _ in rows]
+        values = [[mask_value(v, view.tags, profile), n] for v, n, _, _ in rows]
     else:
         values = [[f"<{v}>({lo}-{hi})" if v else v, n] for v, n, lo, hi in rows]
     return {"column": args.column, "grouped_by": "value" if raw and not args.normalized else
@@ -106,7 +106,7 @@ def sample_rows(view: RunView, args: SampleRowsArgs) -> dict[str, Any]:
         where, sql.Literal(args.n))  # fmt: skip
     with get_ro_conn() as conn:
         rows = conn.execute(query, {"run_id": view.run_id}).fetchall()
-    return {"rows": [{"line": line, **{c: mask_value(c, payload.get(c), view.tags, p) for c, p in view.profiles.items()}}
+    return {"rows": [{"line": line, **{c: mask_value(payload.get(c), view.tags, p) for c, p in view.profiles.items()}}
                      for line, payload in rows]}  # fmt: skip
 
 
@@ -133,7 +133,7 @@ def check_regex(view: RunView, args: RegexArgs) -> dict[str, Any]:
     except Exception as exc:
         raise ToolError(f"regex failed: {str(exc).splitlines()[0][:150]}") from exc
     return {"column": args.column, "non_blank": total, "match_share": round(matched / total, 4) if total else 0.0,
-            "non_matching": _merge_masked([(mask_value(args.column, v, view.tags, profile), n) for v, n in misses])}  # fmt: skip
+            "non_matching": _merge_masked([(mask_value(v, view.tags, profile), n) for v, n in misses])}  # fmt: skip
 
 
 def _merge_masked(pairs: list[tuple[Any, int]], limit: int = 5) -> list[list[Any]]:
@@ -172,7 +172,7 @@ def test_rule(view: RunView, args: TestRuleArgs) -> dict[str, Any]:
     n = len(rows) or 1
 
     def shown(v: Any) -> Any:
-        return mask_value(rule.source, v if v is None or isinstance(v, str) else str(v), view.tags, profile)
+        return mask_value(v if v is None or isinstance(v, str) else str(v), view.tags, profile)
 
     blank = [r["__raw"] is None or not r["__raw"].strip() for r in rows]
     flags = Counter(f for r in rows for f in ((r["_quality_flags"] or {}).get(rule.name) or []))
@@ -242,6 +242,6 @@ def check_cross_column(view: RunView, args: CrossColumnArgs) -> dict[str, Any]:
         "share": round(len(later) / len(compared), 4) if compared else 0.0,
         "unambiguous_compared": len(certain),
         "unambiguous_share": round(len(certain_later) / len(certain), 4) if certain else None,
-        "examples": [{"line": line, "a": mask_value(args.a, ra, view.tags, pa), "b": mask_value(args.b, rb, view.tags, pb),
+        "examples": [{"line": line, "a": mask_value(ra, view.tags, pa), "b": mask_value(rb, view.tags, pb),
                       "gap_days": round((a - b).total_seconds() / 86400, 1)} for line, a, b, ra, rb in later[:5]],
     }  # fmt: skip

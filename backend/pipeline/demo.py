@@ -17,13 +17,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from pipeline.bronze import get_run, ingest_file
 from pipeline.config import REPO_ROOT
 from pipeline.context import _save, get_context
-from pipeline.db import transaction
+from pipeline.db import column_list, insert_sql, table, transaction
 from pipeline.logging_setup import get_logger
 from pipeline.silver.rules_schema import (
     APPROVED_PATH,
@@ -99,18 +100,18 @@ def ensure_approved_context(run_id: str) -> dict[str, Any]:
 def load_fixtures(conn: Any) -> dict[str, int]:
     """Insert recorded LLM answers and category labels that are missing (init-db calls this)."""
     loaded = {}
-    for name, (table, key, cols) in CACHES.items():
+    for name, (target, key, cols) in CACHES.items():
         path = FIXTURES / name
         if not path.exists():
             continue
         lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        if conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] >= len(lines):
+        if conn.execute(sql.SQL("SELECT count(*) FROM {}").format(table(target))).fetchone()[0] >= len(lines):
             continue  # already loaded (every init-db and test calls this)
         rows = [json.loads(line) for line in lines]
-        placeholders = ", ".join(["%s"] * len(cols))
+        on_conflict = sql.SQL(" ON CONFLICT ({}) DO NOTHING").format(sql.Identifier(key))
         with conn.cursor() as cur:
             cur.executemany(
-                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders}) ON CONFLICT ({key}) DO NOTHING",
+                insert_sql(target, cols, on_conflict),
                 [tuple(Jsonb(r[c]) if c == "response" else r[c] for c in cols) for r in rows],
             )
         loaded[name] = len(rows)
@@ -122,8 +123,11 @@ def export_fixtures(run_id: str) -> dict[str, Any]:
     FIXTURES.mkdir(exist_ok=True)
     counts = {}
     with transaction() as conn, conn.cursor(row_factory=dict_row) as cur:
-        for name, (table, key, cols) in CACHES.items():
-            rows = cur.execute(f"SELECT {', '.join(cols)} FROM {table} ORDER BY {key}").fetchall()
+        for name, (target, key, cols) in CACHES.items():
+            query = sql.SQL("SELECT {} FROM {} ORDER BY {}").format(
+                column_list(cols), table(target), sql.Identifier(key)
+            )
+            rows = cur.execute(query).fetchall()
             with (FIXTURES / name).open("w", encoding="utf-8") as f:
                 for r in rows:
                     f.write(json.dumps({c: (float(r[c]) if c == "confidence" else r[c]) for c in cols},

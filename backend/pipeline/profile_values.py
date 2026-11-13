@@ -9,6 +9,7 @@ import re
 import statistics
 import unicodedata
 from collections import Counter, defaultdict
+from contextlib import suppress
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -234,10 +235,8 @@ def sentinels(
         spikes = [v for v in counts if v not in found and _is_spike(counts, v, total)]
         for value in spikes if len(spikes) <= CFG.spike_max_values else []:
             found[value] = (counts[value], "spike")
-            try:
+            with suppress(ValueError):  # non-numeric spikes are still reported, just not excluded
                 excluded.add(float(value))
-            except ValueError:
-                pass
     findings = [
         {"value": truncate(v), "count": c, "share": share(c, total), "kind": kind}
         for v, (c, kind) in sorted(found.items(), key=lambda kv: (-kv[1][0], kv[0]))

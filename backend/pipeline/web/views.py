@@ -773,7 +773,11 @@ def gold_view(run_id: uuid.UUID) -> dict[str, Any] | None:
     from pipeline.gold.build import load_model
 
     escalated = sql.SQL(", ").join(sql.Literal(v) for v in load_model().get("escalated_statuses") or [""])
-    q = lambda text: _q_sql(sql.SQL(text).format(g=schema, e=escalated))
+
+    def q(template: str) -> list[dict[str, Any]]:
+        """Run a literal SQL template; {g} is the gold schema, {e} the escalated statuses (both quoted)."""
+        return _q_sql(sql.SQL(template).format(g=schema, e=escalated))
+
     holder = q("SELECT silver_build_id FROM {g}.fact_tickets LIMIT 1")
     if not holder or str(holder[0]["silver_build_id"]) != str(last_ok["silver_build_id"]):
         return jsonable(out | {"note": "the gold tables now hold another run"})
@@ -782,7 +786,7 @@ def gold_view(run_id: uuid.UUID) -> dict[str, Any] | None:
         "shown_build": str(last_ok["build_id"]),
         "findings": q("SELECT * FROM {g}.data_quality_findings ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,"
                       " rows_affected DESC"),
-        "kpis": q("SELECT count(*) AS tickets, count(*) FILTER (WHERE is_resolved) AS resolved,"
+        "kpis": q("SELECT count(*) AS tickets, count(*) FILTER (WHERE is_resolved) AS resolved,"  # noqa: S608 - literal template, sql.Identifier/Literal fill it
                   " count(*) FILTER (WHERE usable_for_time_metrics) AS usable,"
                   " round(percentile_cont(0.5) WITHIN GROUP (ORDER BY resolution_hours) FILTER (WHERE usable_for_time_metrics)::numeric, 1) AS median_hours,"
                   " count(*) FILTER (WHERE sla_met IS NOT NULL) AS sla_measured, count(*) FILTER (WHERE sla_met) AS sla_met,"
