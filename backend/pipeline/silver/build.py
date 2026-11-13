@@ -35,7 +35,6 @@ from pipeline.silver.compiler import (
     write_compiled,
 )
 from pipeline.silver.rules_schema import (
-    APPROVED_PATH,
     SilverRules,
     from_yaml,
     rules_hash,
@@ -52,7 +51,12 @@ class BuildError(RuntimeError):
 
 def approved_rules(run_id: str, path: Path | None = None) -> tuple[SilverRules, str]:
     """(rules, yaml text) approved for this run; raises BuildError otherwise."""
-    path = path or APPROVED_PATH
+    if path is None:
+        from pipeline.demo import (
+            approved_path_for,  # the repo file, or its binding to this run
+        )
+
+        path = approved_path_for(run_id)
     if not path.exists():
         raise BuildError("no approved rules yet: finish the review first")
     text = path.read_text()

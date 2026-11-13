@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 data/uploads/
 build/
+# review drafts per run (proposal, decisions, validation); the approved rules are rules/silver_rules.yaml
+rules/*-*-*-*-*/

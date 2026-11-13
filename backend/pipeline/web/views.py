@@ -122,6 +122,10 @@ def current_rules(run_id: uuid.UUID) -> tuple[SilverRules | None, str | None, Pa
                 return approved, "approved", APPROVED_PATH
         except (ValueError, TypeError):
             pass
+    from pipeline.demo import bound_path  # approved rules bound to this run by the demo
+
+    if bound_path(str(run_id)).exists():
+        return SilverRules.model_validate(from_yaml(bound_path(str(run_id)).read_text())), "approved", bound_path(str(run_id))
     path = proposed_path(str(run_id))
     if path.exists():
         try:

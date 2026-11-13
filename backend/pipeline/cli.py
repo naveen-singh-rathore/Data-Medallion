@@ -70,6 +70,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("dq-graph", help="write docs/dq_agent_graph.md (mermaid)")
     silver = sub.add_parser("build-silver", help="apply the approved rules and store the silver table")
     silver.add_argument("--run-id", type=uuid.UUID)
+    demo = sub.add_parser("demo", help="fresh database to gold in replay mode: no API key, no clicks")
+    demo.add_argument("path", nargs="?", type=Path, help="CSV (default data/raw_tickets.csv)")
+    export = sub.add_parser("export-fixtures", help="write fixtures/*.jsonl and the approved-rules provenance")
+    export.add_argument("--run-id", type=uuid.UUID)
     gold = sub.add_parser("build-gold", help="build the gold tables from the current silver build")
     gold.add_argument("--run-id", type=uuid.UUID)
     cls = sub.add_parser("classify-category", help="AI label for rows the rules could not standardise (cached)")
@@ -242,6 +246,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"silver build {b['build_id']} -> {b['target_table']} ({b['duration_ms']} ms)\n"
               f"  rows in {b['rows_in']}: kept {b['rows_kept']}, flagged {b['rows_flagged']}, "
               f"rejected {b['rows_rejected']}, duplicate {b['rows_duplicate']}  reconciliation ✓")
+    elif args.command == "demo":
+        from pipeline.demo import DEMO_FILE, run_demo
+
+        print(json.dumps(run_demo(args.path or DEMO_FILE), indent=2, default=str))
+    elif args.command == "export-fixtures":
+        from pipeline.demo import export_fixtures
+
+        print(json.dumps(export_fixtures(str(args.run_id or latest_succeeded_run())), indent=2))
     elif args.command == "build-gold":
         from pipeline.gold.build import build_gold
 

@@ -1,7 +1,6 @@
 services:
   db:
     image: pgvector/pgvector:pg16
-    container_name: data-medallion-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-dev}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev}
@@ -16,6 +15,21 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+
+  # Pipeline CLI + UI (http://localhost:8000). `make demo` runs the whole pipeline in here.
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dev}:${POSTGRES_PASSWORD:-dev}@db:5432/${POSTGRES_DB:-appdb}
+      LLM_MODE: ${LLM_MODE:-replay}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    volumes:
+      - .:/app
+    ports:
+      - "${UI_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:

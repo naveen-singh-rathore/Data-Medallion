@@ -25,6 +25,14 @@ def migrate(sql_dir: Path = settings.sql_dir) -> int:
         with transaction() as conn:
             conn.execute(path.read_text())  # type: ignore[arg-type]  # trusted repo SQL
         log.info("applied sql file", file=path.name)
+    from pipeline.demo import (
+        load_fixtures,  # recorded LLM answers: replay works on a fresh database
+    )
+
+    with transaction() as conn:
+        loaded = load_fixtures(conn)
+    if loaded:
+        log.info("fixtures loaded", **{k.split(".")[0]: v for k, v in loaded.items()})
     setup_checkpointer()
     log.info("migration complete", files=len(files))
     return len(files)

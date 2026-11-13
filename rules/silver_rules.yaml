@@ -1,7 +1,7 @@
 schema_version: '1'
 target_table: silver.records_clean
 source_run_id: 85113639-1dc6-469c-990c-a29da5334456
-generated_by: agent
+generated_by: human
 columns:
 - name: resolution_notes
   source: resolution_notes
@@ -46,6 +46,7 @@ columns:
   - DD-Mon-YYYY HH:MM
   - MM/DD/YYYY
   - MM-DD-YYYY HH:MM:SS
+  - epoch seconds
   day_month_order: mdy
   confidence: 0.75
   why: created_at uses 8 formats; unifying them is required for time-to-resolve and SLA compliance. 1863 values
@@ -57,7 +58,7 @@ columns:
   - NULLTOK:created_at
   - SENTINEL:created_at
   - UNPARSED:created_at
-  generated_by: agent
+  generated_by: human
 - name: resolved_at
   source: resolved_at
   type: timestamp
@@ -73,6 +74,7 @@ columns:
   - DD-Mon-YYYY HH:MM
   - MM/DD/YYYY
   - MM-DD-YYYY HH:MM:SS
+  - epoch seconds
   day_month_order: mdy
   confidence: 0.75
   why: 48.2% of resolved_at is empty because the ticket is still open; these NULLs are kept (not required) so open
@@ -84,7 +86,7 @@ columns:
   - NULLTOK:resolved_at
   - UNPARSED:resolved_at
   - EMPTY:resolved_at
-  generated_by: agent
+  generated_by: human
 - name: category
   source: category
   type: text
@@ -99,10 +101,19 @@ columns:
     electrical:
     - Electrical
     - Electric
+    - Electrical Systems
+    - Elec
     elevator:
     - Elevator
     - ELEVATOR
     - Vertical Transport
+    - elevator/escalator
+    - Elevator A-001 stuck between floors 4 and 12. No one inside
+    - Elevator E-048 stuck between floors 2 and 9. No one inside (
+    - Elevator buttons for floor 1 not responding. HQ Floor 1.
+    - Elevator making grinding noise. Annex East main elevator.
+    - Elevator making grinding noise. Annex West main elevator.
+    - elevator out of order again Parking Garage
     fire_safety:
     - Fire Safety
     - fire safety
@@ -113,9 +124,18 @@ columns:
     - General Maintenance
     - general maintenance
     - Maintenance
+    - General
     hvac:
     - HVAC
     - Heating/Cooling
+    - HVAC System
+    it_network:
+    - Network
+    - IT/Network
+    - IT
+    - WiFi
+    - Connectivity
+    - IT Support
     janitorial:
     - Janitorial
     - janitorial
@@ -142,13 +162,17 @@ columns:
     - security
     - Access Control
     - Badge/Access
+    - Security Systems
+    - Security camera A-040 offline since yesterday. Covers parkin
+    - Security camera E-049 offline since yesterday. Covers parkin
   confidence: 0.7
-  why: 111 raw spellings split each category (e.g. pest control appears as 4 variants totalling ~1056 rows); without
-    merging, ticket volume and cost by category are fragmented. 13 '???/null/unknown' tokens become NULL.
+  why: '111 raw spellings split each category (e.g. pest control appears as 4 variants totalling ~1056 rows); without
+    merging, ticket volume and cost by category are fragmented. 13 ''???/null/unknown'' tokens become NULL. it_network
+    added by the reviewer: ~1,000 IT/network tickets had no category in the list.'
   addresses:
   - VARIANTS:category
   - NULLTOK:category
-  generated_by: agent
+  generated_by: human
 - name: priority
   source: priority
   type: text
@@ -161,10 +185,13 @@ columns:
   mapping:
     critical:
     - critical
+    - crit
     high:
     - high
+    - hi
     low:
     - low
+    - lo
     medium:
     - medium
     - med
@@ -174,7 +201,7 @@ columns:
   addresses:
   - VARIANTS:priority
   - NULLTOK:priority
-  generated_by: agent
+  generated_by: human
 - name: status
   source: status
   type: text

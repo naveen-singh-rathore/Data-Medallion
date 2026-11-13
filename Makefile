@@ -1,4 +1,4 @@
-.PHONY: venv up down init-db test lint psql ui
+.PHONY: venv up down init-db test lint psql ui demo fixtures
 
 UI_PORT ?= 8000
 
@@ -9,7 +9,7 @@ venv:
 	$(PYTHON) -m pip install -q -r backend/requirements.txt
 
 up:
-	docker compose up -d --wait
+	docker compose up -d --build --wait
 
 down:
 	docker compose down
@@ -28,3 +28,12 @@ psql:
 
 ui:
 	cd backend && $(PYTHON) -m uvicorn pipeline.web.app:app --port $(UI_PORT)
+
+# Fresh clone to gold in one command: no API key, no UI clicks (replay mode, recorded answers in fixtures/).
+demo: up
+	docker compose exec -T backend python -m pipeline.cli demo
+	@echo "UI: http://localhost:$(UI_PORT)"
+
+# Re-export recorded LLM answers, category labels and the approved-rules provenance from the database.
+fixtures:
+	cd backend && $(PYTHON) -m pipeline.cli export-fixtures
