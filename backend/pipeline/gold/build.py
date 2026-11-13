@@ -24,6 +24,7 @@ from psycopg.types.json import Jsonb
 from pipeline.config import REPO_ROOT
 from pipeline.context import get_context
 from pipeline.db import transaction
+from pipeline.errors import PipelineError
 from pipeline.logging_setup import get_logger
 from pipeline.privacy import context_tags
 from pipeline.silver.build import approved_rules, is_current, latest_build
@@ -36,7 +37,7 @@ ROLE_TAGS = {"id": "id", "category": "category", "priority": "priority", "status
              "money": "money", "sla": "duration"}  # fmt: skip
 
 
-class GoldError(RuntimeError):
+class GoldError(PipelineError, RuntimeError):
     """Gold can't be built (no current silver build, a role has no column) or a check failed."""
 
 

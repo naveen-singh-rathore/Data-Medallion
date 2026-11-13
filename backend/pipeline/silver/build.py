@@ -27,6 +27,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from pipeline.db import transaction
+from pipeline.errors import PipelineError
 from pipeline.logging_setup import get_logger
 from pipeline.silver.compiler import (
     compile_rules,
@@ -45,7 +46,7 @@ STATUS_SQL = ("CASE WHEN c._rejected THEN 'rejected' WHEN c._dup_rank > 1 OR c._
               " WHEN cardinality(c._errors) > 0 THEN 'flagged' ELSE 'kept' END")  # fmt: skip
 
 
-class BuildError(RuntimeError):
+class BuildError(PipelineError, RuntimeError):
     """The build can't start (no approved rules for the run) or failed reconciliation."""
 
 

@@ -4,15 +4,19 @@ import argparse
 import json
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import psycopg
 
 from pipeline.agent_tools import TOOLS, run_tool
 from pipeline.bronze import get_run, ingest_file, recent_runs
 from pipeline.card import render_card
 from pipeline.config import settings
 from pipeline.context import approve_context, compare_contexts, ensure_context
-from pipeline.llm import LLMError
+from pipeline.errors import PipelineError
+from pipeline.llm import LLMCacheMiss, LLMError
 from pipeline.logging_setup import get_logger
 from pipeline.metrics import format_rows, run_metrics
 from pipeline.migrate import migrate
@@ -21,18 +25,34 @@ from pipeline.silver.defaults import default_rules
 from pipeline.silver.rules_schema import from_yaml, to_yaml
 from pipeline.silver.validator import validate_rules
 
-STUB_COMMANDS: list[str] = []
+Handler = Callable[[argparse.Namespace], int | None]
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """All sub-commands, grouped by pipeline layer."""
     parser = argparse.ArgumentParser(prog="pipeline", description="Medallion data pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
+    _add_bronze_commands(sub)
+    _add_profile_commands(sub)
+    _add_agent_commands(sub)
+    _add_build_commands(sub)
+    return parser
+
+
+def _add_bronze_commands(sub: Any) -> None:
     sub.add_parser("init-db", help="create layer schemas and tables (idempotent)")
     ingest = sub.add_parser("ingest", help="load a CSV into bronze")
     ingest.add_argument("path", help="path to the CSV file")
     ingest.add_argument("--force", action="store_true", help="reload even if already ingested")
     runs = sub.add_parser("runs", help="show recent ingestion runs")
     runs.add_argument("--limit", type=int, default=20)
+    run_all = sub.add_parser("run-all", help="ingest a CSV, profile it, add context, render the card")
+    run_all.add_argument("path", help="path to the CSV file")
+    run_all.add_argument("--force", action="store_true", help="reload even if already ingested")
+    run_all.add_argument("--context-file", type=Path, help="human-written context (skips the LLM draft)")
+
+
+def _add_profile_commands(sub: Any) -> None:
     profile = sub.add_parser("profile", help="profile a bronze run (default: latest succeeded)")
     profile.add_argument("--run-id", type=uuid.UUID)
     context = sub.add_parser("context", help="store human business context, or draft it with one cheap LLM call")
@@ -50,6 +70,9 @@ def _build_parser() -> argparse.ArgumentParser:
     card.add_argument("--exact", action="store_true", help="also count exact tokens with the provider (needs a key)")
     metrics = sub.add_parser("metrics", help="profile vs card size, context call cost, LLM spend")
     metrics.add_argument("--run-id", type=uuid.UUID)
+
+
+def _add_agent_commands(sub: Any) -> None:
     tool = sub.add_parser("tool", help="run one agent tool by hand (logged like an agent call)")
     tool.add_argument("name", help="tool name (see `tool list`)")
     tool.add_argument("--run-id", type=uuid.UUID)
@@ -72,14 +95,6 @@ def _build_parser() -> argparse.ArgumentParser:
         if name == "dq-reject":
             dq.add_argument("--reason", required=True)
     sub.add_parser("dq-graph", help="write docs/dq_agent_graph.md (mermaid)")
-    silver = sub.add_parser("build-silver", help="apply the approved rules and store the silver table")
-    silver.add_argument("--run-id", type=uuid.UUID)
-    demo = sub.add_parser("demo", help="fresh database to gold in replay mode: no API key, no clicks")
-    demo.add_argument("path", nargs="?", type=Path, help="CSV (default data/raw_tickets.csv)")
-    export = sub.add_parser("export-fixtures", help="write fixtures/*.jsonl and the approved-rules provenance")
-    export.add_argument("--run-id", type=uuid.UUID)
-    gold = sub.add_parser("build-gold", help="build the gold tables from the current silver build")
-    gold.add_argument("--run-id", type=uuid.UUID)
     cls = sub.add_parser("classify-category", help="AI label for rows the rules could not standardise (cached)")
     cls.add_argument("--run-id", type=uuid.UUID)
     cls.add_argument("--mode", choices=["live", "replay", "record"], help="LLM mode for this command (default: .env)")
@@ -90,13 +105,17 @@ def _build_parser() -> argparse.ArgumentParser:
     ev = sub.add_parser("category-eval", help="score the AI labels against a filled-in eval sheet")
     ev.add_argument("path", type=Path)
     ev.add_argument("--run-id", type=uuid.UUID)
-    run_all = sub.add_parser("run-all", help="ingest a CSV, profile it, add context, render the card")
-    run_all.add_argument("path", help="path to the CSV file")
-    run_all.add_argument("--force", action="store_true", help="reload even if already ingested")
-    run_all.add_argument("--context-file", type=Path, help="human-written context (skips the LLM draft)")
-    for name in STUB_COMMANDS:
-        sub.add_parser(name)
-    return parser
+
+
+def _add_build_commands(sub: Any) -> None:
+    silver = sub.add_parser("build-silver", help="apply the approved rules and store the silver table")
+    silver.add_argument("--run-id", type=uuid.UUID)
+    gold = sub.add_parser("build-gold", help="build the gold tables from the current silver build")
+    gold.add_argument("--run-id", type=uuid.UUID)
+    demo = sub.add_parser("demo", help="fresh database to gold in replay mode: no API key, no clicks")
+    demo.add_argument("path", nargs="?", type=Path, help="CSV (default data/raw_tickets.csv)")
+    export = sub.add_parser("export-fixtures", help="write fixtures/*.jsonl and the approved-rules provenance")
+    export.add_argument("--run-id", type=uuid.UUID)
 
 
 def _reconciled(run: dict[str, Any]) -> bool:
@@ -171,6 +190,7 @@ def _profile(run_id: uuid.UUID) -> None:
 
 
 def format_context(context: dict[str, Any]) -> str:
+    """The stored business context: source, approval state, and the draft (or the person's text)."""
     state = "in use" if context["approved"] else "UNAPPROVED (older draft; `context --approve`)"
     body = json.dumps(context["draft"], indent=2, ensure_ascii=False) if context["draft"] else context["text"]
     return f"CONTEXT ({context['source']}, {state})\n{body}"
@@ -196,104 +216,184 @@ def _tool(name: str, raw_args: str, run_id: uuid.UUID) -> None:
     print(json.dumps(run_tool(name, json.loads(raw_args), run_id), indent=2, ensure_ascii=False, default=str))
 
 
-def _dq(args: argparse.Namespace) -> None:
-    from pipeline.dq_agent import (
-        runner,  # local: LangGraph is only needed for these commands
-    )
+def _run_id(args: argparse.Namespace) -> uuid.UUID:
+    """The --run-id given, else the latest succeeded ingestion run."""
+    return args.run_id or latest_succeeded_run()
+
+
+def _print_json(data: Any) -> None:
+    print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+
+
+# --- command handlers: each takes the parsed args, returns an exit code (None = 0) -----------
+
+
+def _cmd_init_db(_args: argparse.Namespace) -> None:
+    migrate()
+
+
+def _cmd_ingest(args: argparse.Namespace) -> None:
+    print(format_funnel(get_run(ingest_file(args.path, force=args.force))))
+
+
+def _cmd_runs(args: argparse.Namespace) -> None:
+    print(format_runs(recent_runs(args.limit)))
+
+
+def _cmd_profile(args: argparse.Namespace) -> None:
+    _profile(_run_id(args))
+
+
+def _cmd_context(args: argparse.Namespace) -> None:
+    run_id = _run_id(args)
+    if args.compare:
+        print("\n".join(compare_contexts(run_id)))
+    elif args.approve and not args.context_file:
+        print("approved" if approve_context(run_id) else "no inferred context stored for this run yet")
+    else:
+        _context(run_id, args.context_file, redraft=args.redraft)
+
+
+def _cmd_card(args: argparse.Namespace) -> None:
+    _card(_run_id(args), args.budget, show=args.show, exact=args.exact)
+
+
+def _cmd_metrics(args: argparse.Namespace) -> None:
+    print(format_rows(run_metrics(_run_id(args))))
+
+
+def _cmd_tool(args: argparse.Namespace) -> None:
+    _tool(args.name, args.args, _run_id(args))
+
+
+def _cmd_validate_rules(args: argparse.Namespace) -> int:
+    report = validate_rules(from_yaml(args.path.read_text(encoding="utf-8")), _run_id(args))
+    print(report.feedback())
+    return 0 if report.ok else 1
+
+
+def _cmd_default_rules(args: argparse.Namespace) -> None:
+    print(to_yaml(default_rules(_run_id(args))))
+
+
+def _cmd_dq(args: argparse.Namespace) -> None:
+    from pipeline.dq_agent import runner  # local: LangGraph is only needed for these commands
 
     if args.command == "dq-graph":
         print(runner.write_mermaid())
         return
-    run_id = str(args.run_id or latest_succeeded_run())
-    result = {
+    run_id = str(_run_id(args))
+    actions: dict[str, Callable[[], Any]] = {
         "dq-run": lambda: runner.run(run_id, fresh=args.fresh),
         "dq-status": lambda: runner.status(run_id),
         "dq-approve": lambda: runner.resume(run_id, {"action": "approve"}),
         "dq-reject": lambda: runner.resume(run_id, {"action": "reject", "reason": args.reason}),
-    }[args.command]()
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    }
+    _print_json(actions[args.command]())
+
+
+def _cmd_build_silver(args: argparse.Namespace) -> None:
+    from pipeline.silver.build import build_silver
+
+    b = build_silver(_run_id(args))
+    print(
+        f"silver build {b['build_id']} -> {b['target_table']} ({b['duration_ms']} ms)\n"
+        f"  rows in {b['rows_in']}: kept {b['rows_kept']}, flagged {b['rows_flagged']}, "
+        f"rejected {b['rows_rejected']}, duplicate {b['rows_duplicate']}  reconciliation ✓"
+    )
+
+
+def _cmd_build_gold(args: argparse.Namespace) -> None:
+    from pipeline.gold.build import build_gold
+
+    g = build_gold(_run_id(args))
+    print(f"gold build {g['build_id']} ({g['duration_ms']} ms) from silver build {g['silver_build_id']}")
+    print("  rows: " + ", ".join(f"{k} {v}" for k, v in g["row_counts"].items()))
+    for name, c in g["checks"].items():
+        print(f"  {'✓' if c['ok'] else '✗'} {name}: {c['actual']}")
+
+
+def _cmd_classify(args: argparse.Namespace) -> None:
+    from pipeline.silver import classify
+
+    _print_json(classify.classify_run(_run_id(args), mode=args.mode, check=args.check))
+
+
+def _cmd_eval_sheet(args: argparse.Namespace) -> None:
+    from pipeline.silver import classify
+
+    print(classify.make_eval_sheet(_run_id(args), args.n))
+
+
+def _cmd_eval(args: argparse.Namespace) -> None:
+    from pipeline.silver import classify
+
+    _print_json(classify.evaluate(args.path, _run_id(args)))
+
+
+def _cmd_demo(args: argparse.Namespace) -> None:
+    from pipeline.demo import DEMO_FILE, run_demo
+
+    _print_json(run_demo(args.path or DEMO_FILE))
+
+
+def _cmd_export_fixtures(args: argparse.Namespace) -> None:
+    from pipeline.demo import export_fixtures
+
+    _print_json(export_fixtures(str(_run_id(args))))
+
+
+def _cmd_run_all(args: argparse.Namespace) -> None:
+    run_id = ingest_file(args.path, force=args.force)
+    print(format_funnel(get_run(run_id)))
+    _profile(run_id)
+    try:
+        _context(run_id, args.context_file)
+    except LLMError as exc:  # no key / no recording: the card still renders, marked "no context"
+        get_logger("run-all", run_id=str(run_id)).warning("context skipped", error=str(exc)[:200])
+    _card(run_id)
+
+
+COMMANDS: dict[str, Handler] = {
+    "init-db": _cmd_init_db,
+    "ingest": _cmd_ingest,
+    "runs": _cmd_runs,
+    "run-all": _cmd_run_all,
+    "profile": _cmd_profile,
+    "context": _cmd_context,
+    "card": _cmd_card,
+    "metrics": _cmd_metrics,
+    "tool": _cmd_tool,
+    "validate-rules": _cmd_validate_rules,
+    "default-rules": _cmd_default_rules,
+    **dict.fromkeys(("dq-run", "dq-status", "dq-approve", "dq-reject", "dq-graph"), _cmd_dq),
+    "classify-category": _cmd_classify,
+    "category-eval-sheet": _cmd_eval_sheet,
+    "category-eval": _cmd_eval,
+    "build-silver": _cmd_build_silver,
+    "build-gold": _cmd_build_gold,
+    "demo": _cmd_demo,
+    "export-fixtures": _cmd_export_fixtures,
+}
+
+# Expected, actionable failures print one line (exit 2); anything else is a bug and keeps its traceback.
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the arguments, run one command, return the process exit code."""
     args = _build_parser().parse_args(argv)
-    if args.command == "init-db":
-        migrate()
-    elif args.command == "ingest":
-        run_id = ingest_file(args.path, force=args.force)
-        print(format_funnel(get_run(run_id)))
-    elif args.command == "runs":
-        print(format_runs(recent_runs(args.limit)))
-    elif args.command == "profile":
-        _profile(args.run_id or latest_succeeded_run())
-    elif args.command == "context":
-        run_id = args.run_id or latest_succeeded_run()
-        if args.compare:
-            print("\n".join(compare_contexts(run_id)))
-        elif args.approve and not args.context_file:
-            print("approved" if approve_context(run_id) else "no inferred context stored for this run yet")
-        else:
-            _context(run_id, args.context_file, redraft=args.redraft)
-    elif args.command == "card":
-        _card(args.run_id or latest_succeeded_run(), args.budget, show=args.show, exact=args.exact)
-    elif args.command == "metrics":
-        print(format_rows(run_metrics(args.run_id or latest_succeeded_run())))
-    elif args.command == "tool":
-        _tool(args.name, args.args, args.run_id or latest_succeeded_run())
-    elif args.command == "validate-rules":
-        report = validate_rules(from_yaml(args.path.read_text(encoding="utf-8")), args.run_id or latest_succeeded_run())
-        print(report.feedback())
-        return 0 if report.ok else 1
-    elif args.command == "default-rules":
-        print(to_yaml(default_rules(args.run_id or latest_succeeded_run())))
-    elif args.command == "build-silver":
-        from pipeline.silver.build import build_silver
-
-        b = build_silver(args.run_id or latest_succeeded_run())
-        print(
-            f"silver build {b['build_id']} -> {b['target_table']} ({b['duration_ms']} ms)\n"
-            f"  rows in {b['rows_in']}: kept {b['rows_kept']}, flagged {b['rows_flagged']}, "
-            f"rejected {b['rows_rejected']}, duplicate {b['rows_duplicate']}  reconciliation ✓"
-        )
-    elif args.command == "demo":
-        from pipeline.demo import DEMO_FILE, run_demo
-
-        print(json.dumps(run_demo(args.path or DEMO_FILE), indent=2, default=str))
-    elif args.command == "export-fixtures":
-        from pipeline.demo import export_fixtures
-
-        print(json.dumps(export_fixtures(str(args.run_id or latest_succeeded_run())), indent=2))
-    elif args.command == "build-gold":
-        from pipeline.gold.build import build_gold
-
-        g = build_gold(args.run_id or latest_succeeded_run())
-        print(f"gold build {g['build_id']} ({g['duration_ms']} ms) from silver build {g['silver_build_id']}")
-        print("  rows: " + ", ".join(f"{k} {v}" for k, v in g["row_counts"].items()))
-        for name, c in g["checks"].items():
-            print(f"  {'✓' if c['ok'] else '✗'} {name}: {c['actual']}")
-    elif args.command in ("classify-category", "category-eval-sheet", "category-eval"):
-        from pipeline.silver import classify
-
-        run_id = args.run_id or latest_succeeded_run()
-        if args.command == "classify-category":
-            print(json.dumps(classify.classify_run(run_id, mode=args.mode, check=args.check), indent=2, default=str))
-        elif args.command == "category-eval-sheet":
-            print(classify.make_eval_sheet(run_id, args.n))
-        else:
-            print(json.dumps(classify.evaluate(args.path, run_id), indent=2, default=str))
-    elif args.command.startswith("dq-"):
-        _dq(args)
-    elif args.command == "run-all":
-        run_id = ingest_file(args.path, force=args.force)
-        print(format_funnel(get_run(run_id)))
-        _profile(run_id)
-        try:
-            _context(run_id, args.context_file)
-        except LLMError as exc:  # no key / no recording: the card still renders, marked "no context"
-            get_logger("run-all", run_id=str(run_id)).warning("context skipped", error=str(exc)[:200])
-        _card(run_id)
-    else:
-        get_logger(args.command).warning("not implemented yet", command=args.command)
-    return 0
+    try:
+        return COMMANDS[args.command](args) or 0
+    except LLMCacheMiss as exc:  # the message says what to do
+        print(f"error: {args.command}: {exc}", file=sys.stderr)
+    except LLMError as exc:
+        print(f"error: {args.command}: LLM call failed: {exc}", file=sys.stderr)
+    except PipelineError as exc:
+        print(f"error: {args.command}: {exc}", file=sys.stderr)
+    except psycopg.OperationalError as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        print(f"error: {args.command}: database not reachable (run `make up`): {first_line}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from psycopg.types.json import Jsonb
 
 from pipeline.config import settings
 from pipeline.db import column_list, transaction
+from pipeline.errors import PipelineError
 from pipeline.logging_setup import get_logger
 
 ENCODINGS = ("utf-8-sig", "cp1252", "latin-1")
@@ -46,7 +47,7 @@ INSERT_LOAD_ERROR_SQL = """
 """
 
 
-class ReconciliationError(RuntimeError):
+class ReconciliationError(PipelineError, RuntimeError):
     """Raised when loaded + malformed + failed does not account for every record."""
 
 

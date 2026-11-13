@@ -22,6 +22,7 @@ from psycopg.types.json import Jsonb
 
 from pipeline.config import settings
 from pipeline.db import insert_sql, transaction
+from pipeline.errors import PipelineError
 from pipeline.logging_setup import get_logger
 
 MAX_TOKENS = 16_000  # includes (adaptive) thinking tokens; non-streaming stays under SDK timeouts
@@ -46,7 +47,7 @@ PRICING: dict[str, Price] = {
 }
 
 
-class LLMError(RuntimeError):
+class LLMError(PipelineError, RuntimeError):
     """The model could not produce a usable answer (API error, refusal, truncation, bad JSON)."""
 
 
@@ -186,8 +187,8 @@ def call_llm(
         if response is None:
             if mode == "replay":
                 raise LLMCacheMiss(
-                    f"replay mode: no cached response for {purpose} (request {key[:12]}). "
-                    "Run once with LLM_MODE=live or record and an API key to record it."
+                    f"{purpose} answer not in the recorded cache (replay mode, request {key[:12]}); "
+                    "set LLM_API_KEY and LLM_MODE=live to run it fresh"
                 )
             response = _call_api(client or make_client(), model, messages, system, json_schema, tools, effort, options)
         _check_stop(response)

@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 
 from pipeline.bronze import normalize_header
 from pipeline.db import transaction
+from pipeline.errors import MissingRunError
 from pipeline.logging_setup import get_logger
 from pipeline.profile_columns import coarse_mask, column_seed, profile_column
 from pipeline.profile_config import PROFILE_CONFIG as CFG
@@ -59,7 +60,7 @@ def load_run_data(conn: psycopg.Connection, run_id: uuid.UUID) -> RunData:
         (run_id,),
     ).fetchone()
     if not run:
-        raise ValueError(f"run {run_id} not found or not succeeded")
+        raise MissingRunError(f"run {run_id} not found or not succeeded")
     columns = normalize_header(run["header"])
     rows = cur.execute(
         "SELECT source_line, row_hash, payload FROM bronze.records"
@@ -326,7 +327,7 @@ def latest_succeeded_run() -> uuid.UUID:
             "SELECT run_id FROM meta.ingestion_runs WHERE status = 'succeeded' ORDER BY started_at DESC LIMIT 1"
         ).fetchone()
     if not row:
-        raise ValueError("no succeeded ingestion run found; run `ingest` first")
+        raise MissingRunError("no succeeded ingestion run found; run `ingest` first")
     return row[0]
 
 
@@ -337,7 +338,7 @@ def load_profile(run_id: uuid.UUID) -> dict[str, Any]:
             "SELECT summary, issues FROM meta.dataset_profiles WHERE run_id = %s", (run_id,)
         ).fetchone()
         if not dataset:
-            raise ValueError(f"run {run_id} has not been profiled")
+            raise MissingRunError(f"run {run_id} has not been profiled; run `profile` first")
         columns = conn.execute(
             "SELECT profile FROM meta.column_profiles WHERE run_id = %s ORDER BY column_position", (run_id,)
         ).fetchall()

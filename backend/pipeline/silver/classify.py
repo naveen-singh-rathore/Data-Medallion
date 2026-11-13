@@ -35,6 +35,7 @@ from psycopg.types.json import Jsonb
 from pipeline.config import REPO_ROOT, settings
 from pipeline.context import get_context
 from pipeline.db import transaction
+from pipeline.errors import PipelineError
 from pipeline.llm import call_llm
 from pipeline.logging_setup import get_logger
 from pipeline.privacy import context_tags, name_like, scrub_text
@@ -58,7 +59,7 @@ SYSTEM = (
 )
 
 
-class ClassifyError(RuntimeError):
+class ClassifyError(PipelineError, RuntimeError):
     """Classification can't run (no approved rules, no current silver build, no target column)."""
 
 
