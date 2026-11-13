@@ -38,7 +38,8 @@ def _build_parser() -> argparse.ArgumentParser:
     context = sub.add_parser("context", help="store human business context, or draft it with one cheap LLM call")
     context.add_argument("--run-id", type=uuid.UUID)
     context.add_argument("--context-file", type=Path, help="human-written context (plain text or draft-shaped JSON)")
-    context.add_argument("--approve", action="store_true", help="approve the stored (inferred) context")
+    context.add_argument("--approve", action="store_true",
+                         help="approve an inferred context stored unapproved by an older version")
     context.add_argument("--redraft", action="store_true", help="draft the inferred context again (LLM call)")
     context.add_argument("--compare", action="store_true", help="show human vs inferred differences")
     card = sub.add_parser("card", help="render the dataset card within a token budget")
@@ -59,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     defaults.add_argument("--run-id", type=uuid.UUID)
     for name, text in [("dq-run", "run the DQ agent until it pauses or ends"), ("dq-status", "agent thread status"),
                        ("dq-approve", "approve the proposed rules (re-reads proposed.yaml)"),
-                       ("dq-reject", "reject the proposed rules"), ("dq-context-approve", "approve context and resume")]:
+                       ("dq-reject", "reject the proposed rules")]:
         dq = sub.add_parser(name, help=text)
         dq.add_argument("--run-id", type=uuid.UUID)
         if name == "dq-run":
@@ -146,7 +147,7 @@ def _profile(run_id: uuid.UUID) -> None:
 
 
 def format_context(context: dict[str, Any]) -> str:
-    state = "approved" if context["approved"] else "UNAPPROVED (review, then `context --approve`)"
+    state = "in use" if context["approved"] else "UNAPPROVED (older draft; `context --approve`)"
     body = json.dumps(context["draft"], indent=2, ensure_ascii=False) if context["draft"] else context["text"]
     return f"CONTEXT ({context['source']}, {state})\n{body}"
 
@@ -185,7 +186,6 @@ def _dq(args: argparse.Namespace) -> None:
         "dq-status": lambda: runner.status(run_id),
         "dq-approve": lambda: runner.resume(run_id, {"action": "approve"}),
         "dq-reject": lambda: runner.resume(run_id, {"action": "reject", "reason": args.reason}),
-        "dq-context-approve": lambda: runner.context_approve(run_id),
     }[args.command]()
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
 

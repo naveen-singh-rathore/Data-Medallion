@@ -15,6 +15,7 @@ graph TD;
 	tools(tools)
 	force_submit(force_submit)
 	validate(validate)
+	map_leftovers(map_leftovers)
 	give_up(give_up)
 	approve(approve)
 	save(save)
@@ -27,11 +28,12 @@ graph TD;
 	approve -.-> __end__;
 	approve -.-> save;
 	force_submit --> agent;
+	map_leftovers --> approve;
 	prepare --> agent;
 	tools --> agent;
 	validate -.-> __end__;
 	validate -.-> agent;
-	validate -.-> approve;
+	validate -.-> map_leftovers;
 	give_up --> __end__;
 	save --> __end__;
 	approve -.-> approve;

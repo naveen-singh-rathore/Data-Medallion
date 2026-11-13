@@ -2,10 +2,11 @@
 
 START -> prepare -> agent ->(tool calls) tools -> agent
                          ->(budget / no tool call) force_submit -> agent
-                         ->(submit_rules) validate ->(ok) approve -> save -> END
+                         ->(submit_rules) validate ->(ok) map_leftovers -> approve -> save -> END
                                                    ->(errors, attempts < 3) agent
                                                    ->(errors, attempts >= 3) END (status failed)
-Pauses (LangGraph interrupts): prepare waits for an approved context; approve waits for a human.
+Pause (LangGraph interrupt): approve waits for a human. The business context is the AI's draft
+unless a human wrote one; if no draft can be made, the agent runs without context.
 State is checkpointed in Postgres, so a pause survives the process (resume via the CLI).
 """
 
@@ -38,9 +39,10 @@ from pipeline.dq_agent.prompts import (
     system_prompt,
     task_message,
 )
-from pipeline.llm import call_llm
+from pipeline.llm import LLMError, call_llm
 from pipeline.logging_setup import get_logger
 from pipeline.profiling import load_profile
+from pipeline.silver import mapping_assist
 from pipeline.silver.defaults import default_rules, flagged_columns, merge_rules
 from pipeline.silver.rules_schema import (
     APPROVED_PATH,
@@ -125,13 +127,11 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
     # --- prepare --------------------------------------------------------------------------
     def prepare(state: State) -> dict[str, Any]:
         run_id = uuid.UUID(state["run_id"])
-        context = ensure_context(run_id, client=client)
-        while context["source"] == "inferred" and not context["approved"]:
-            interrupt({"reason": "awaiting_context", "message": "approve or edit context first",
-                       "context": context["draft"] or context["text"]})  # fmt: skip
-            context = ensure_context(run_id, client=client)  # re-read after resume (dq-context-approve)
-            if context["source"] == "inferred" and not context["approved"]:
-                break  # resumed without approval: continue with the draft, marked unapproved on the card
+        try:
+            context: dict[str, Any] | None = ensure_context(run_id, client=client)
+        except LLMError as exc:  # no draft possible (e.g. replay without a recording): go on without one
+            log.warning("context unavailable, continuing without it", run_id=state["run_id"], error=str(exc)[:200])
+            context = None
         card = render_card(run_id, exact=settings.llm_mode != "replay" and mode != "replay").text
         profile = load_profile(run_id)
         flagged = sorted(flagged_columns(profile["issues"]), key=[p["column"] for p in profile["columns"]].index)
@@ -241,8 +241,29 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
 
     def route_validate(state: State) -> str:
         if state.get("status") == "awaiting_approval":
-            return "approve"
+            return "map_leftovers"
         return END if state.get("status") == "failed" else "agent"
+
+    # --- map_leftovers --------------------------------------------------------------------
+    def map_leftovers(state: State) -> dict[str, Any]:
+        """The cheap model decides values left outside the standard lists; never blocks the review."""
+        rules = SilverRules.model_validate(state["proposed_rules"])
+        try:
+            done = mapping_assist.complete(state["run_id"], rules, client=client, mode=mode)
+        except LLMError as exc:
+            log.warning("leftover mapping skipped", run_id=state["run_id"], error=str(exc)[:200])
+            return {}
+        report_dict = mapping_assist.write(run_dir(state["run_id"]), done, settings.cheap_model)
+        if report_dict is None:
+            return {}
+        completed = done["rules"]
+        dumped = completed.model_dump(mode="json")
+        update = {"proposed_rules": dumped, "agent_rules": dumped, "validation": report_dict,
+                  "input_tokens": state.get("input_tokens", 0) + done["input_tokens"],
+                  "output_tokens": state.get("output_tokens", 0) + done["output_tokens"],
+                  "cost_usd": round(state.get("cost_usd", 0.0) + done["cost_usd"], 6)}  # fmt: skip
+        metrics.write_agent_run({**state, **update}, "awaiting_approval", rules_hash=rules_hash(completed))
+        return update
 
     def give_up(state: State) -> dict[str, Any]:
         update = {"status": "failed", "duration_ms": _elapsed_ms(state)}
@@ -279,14 +300,16 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
 
     graph = StateGraph(State)
     for name, fn in [("prepare", prepare), ("agent", agent), ("tools", tools), ("force_submit", force_submit),
-                     ("validate", validate), ("give_up", give_up), ("approve", approve), ("save", save)]:  # fmt: skip
+                     ("validate", validate), ("map_leftovers", map_leftovers), ("give_up", give_up),
+                     ("approve", approve), ("save", save)]:  # fmt: skip
         graph.add_node(name, fn)
     graph.add_edge(START, "prepare")
     graph.add_edge("prepare", "agent")
     graph.add_conditional_edges("agent", route_agent, ["tools", "validate", "force_submit", "give_up"])
     graph.add_edge("tools", "agent")
     graph.add_edge("force_submit", "agent")
-    graph.add_conditional_edges("validate", route_validate, ["approve", "agent", END])
+    graph.add_conditional_edges("validate", route_validate, ["map_leftovers", "agent", END])
+    graph.add_edge("map_leftovers", "approve")
     graph.add_edge("give_up", END)
     graph.add_conditional_edges("approve", route_approve, ["save", "approve", END])
     graph.add_edge("save", END)

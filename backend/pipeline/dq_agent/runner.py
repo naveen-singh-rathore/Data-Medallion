@@ -8,7 +8,6 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 
 from pipeline.config import REPO_ROOT, settings
-from pipeline.context import approve_context
 from pipeline.db import transaction
 from pipeline.dq_agent.graph import build_graph, initial_state
 from pipeline.dq_agent.metrics import latest_agent_run
@@ -59,8 +58,8 @@ def run(run_id: str, fresh: bool = False, client: Any = None, mode: str | None =
         if thread_id and not fresh:
             current = snapshot(graph, thread_id)
             if current["paused"] or not current["next"]:
-                return current | {"note": "thread is paused or finished; use dq-approve / dq-reject / "
-                                          "dq-context-approve, or --fresh for a new attempt"}  # fmt: skip
+                return current | {"note": "thread is paused or finished; use dq-approve / dq-reject, "
+                                          "or --fresh for a new attempt"}  # fmt: skip
             graph.invoke(None, config(thread_id))
         else:
             n = (thread_numbers(run_id) or [0])[-1] + 1
@@ -78,13 +77,6 @@ def resume(run_id: str, payload: dict[str, Any], client: Any = None, mode: str |
             return snapshot(graph, thread_id) | {"note": "thread is not paused"}
         graph.invoke(Command(resume=payload), config(thread_id))
         return snapshot(graph, thread_id)
-
-
-def context_approve(run_id: str, client: Any = None, mode: str | None = None) -> dict[str, Any]:
-    import uuid
-
-    approve_context(uuid.UUID(run_id))
-    return resume(run_id, {"action": "approve"}, client, mode)
 
 
 def status(run_id: str) -> dict[str, Any]:

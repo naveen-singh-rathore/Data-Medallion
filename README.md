@@ -74,7 +74,7 @@ dense (numbers, identifiers, punctuation), so chars/4 undercounted it about 2×.
 The pipeline keeps a human context and an LLM-drafted one side by side; the human one is
 used. `python -m pipeline.cli context --compare` shows where they differ.
 
-**Inferred (claude-haiku-5-5, prompt `context_draft_v2`, unapproved):** *facilities
+**Inferred (claude-haiku-5-5, prompt `context_draft_v2`, used as is):** *facilities
 maintenance tickets.* "Each row is a facilities service request logged by building occupants
 and routed to internal staff or external vendors for resolution. Operations managers use this
 data to track how quickly issues are resolved against SLA targets, how often requests
@@ -101,11 +101,35 @@ cd backend
 
 ## DQ agent
 
-`python -m pipeline.cli dq-run` runs the agent until it pauses (context approval or rule
-approval); `dq-status`, `dq-approve`, `dq-reject --reason`, `dq-context-approve` drive the
-pauses. Graph: [docs/dq_agent_graph.md](docs/dq_agent_graph.md). On raw_tickets (Opus 5.5,
+`python -m pipeline.cli dq-run` runs the agent until it pauses for rule approval
+(the business context is the AI's own draft, or none if it cannot draft one; no sign-off);
+`dq-status`, `dq-approve`, `dq-reject --reason` drive the pause. Graph: [docs/dq_agent_graph.md](docs/dq_agent_graph.md). On raw_tickets (Opus 5.5,
 record mode): 15 turns, 22 tool calls, 0 failed validations, $0.72, 137 s; the proposal is in
 `rules/<run_id>/proposed.yaml` awaiting approval. `LLM_MODE=replay` reproduces it with no key.
+
+## UI (for business users)
+
+`make ui` (then open http://localhost:8000; API docs at `/api/docs`). Upload a CSV and follow
+it through every checkpoint, each explained in plain language with the data as it looks there:
+
+| Step | What the page shows |
+| --- | --- |
+| File received | size, encoding, fingerprint, header columns |
+| Bronze | reconciliation funnel (lines → records → stored / broken / refused), raw rows (searchable) |
+| Health check | per-column completeness, type, top values; every issue as a sentence with its numbers |
+| Business context | what the AI decided the data is for (no action needed); optional override by a person |
+| AI briefing | the exact card the agent reads, tokens vs budget, what is masked |
+| AI review | start/resume, live checks, every step with what it asked and what came back, cost |
+| Your approval | one card per rule (column rule, row check, dedup): plain steps, why, issues it fixes, effect on all rows, every setting, its YAML; **Approve / Reject (with reason) / Undo per rule**; values outside a rule's standard list are decided by the AI (a cheap-model step after validation, `map_leftovers`; decision + reason per value, labels only, never free text or private columns) and shown with a change dropdown each; any still left are listed with a choice each (merge into a standard value, new standard value, treat as empty, leave) and a × removes a merged spelling; approving a rule with leftovers asks first; **Finish review** once all are decided, **Reopen review** to change approved rules; **Edit the YAML directly** (Check, Save only if valid, Undo all my edits) |
+| Silver | before → after for every row and value, fixes by column, why rows were flagged or rejected |
+
+Click any row to see its **journey**: file line → bronze payload → silver value by value, with
+the flag that explains each change. The UI is a thin layer (`pipeline/web/`): uploads go
+through `ingest_file` in the request; profile, context draft and card run in a background job;
+the agent and approval use the same runner as the CLI. Silver is a **preview**: the compiled
+rules run read-only (`pipeline_ro`) over all ok rows, cached per rules hash (~9 s once on
+10k rows), until `build-silver` exists. Job progress is kept in memory; everything else is
+read from Postgres and `rules/`, so a restart loses nothing but the progress messages.
 
 ## Scaling to 100x
 

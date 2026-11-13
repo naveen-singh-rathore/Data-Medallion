@@ -63,7 +63,7 @@ def test_inferred_context_validates_and_rejects_unknown_columns(profiled, live, 
                                {"column": "cost", "tag": "money"}])  # fmt: skip
     client = FakeClient(reply)
     context = ensure_context(run_id, client=client)
-    assert (context["source"], context["approved"]) == ("inferred", False)
+    assert (context["source"], context["approved"]) == ("inferred", True)  # the AI decides; no sign-off
     stored = context["draft"]
     assert stored["critical_columns"] == ["priority", "cost"]
     assert stored["column_tags"] == {"priority": "priority", "cost": "money"}

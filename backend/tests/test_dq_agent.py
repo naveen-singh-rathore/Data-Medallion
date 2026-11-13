@@ -135,17 +135,31 @@ def test_reject_ends_the_thread(dq_run) -> None:
     assert result["status"] == "rejected" and result["next"] == []
 
 
-def test_unapproved_inferred_context_pauses_then_resumes(dq_run) -> None:
+def test_inferred_context_never_pauses_the_agent(dq_run) -> None:
+    """Even a draft stored unapproved by an older version is used as is: no human gate on context."""
     import uuid
 
     with transaction() as conn:
         conn.execute("DELETE FROM meta.dataset_context WHERE run_id = %s", (dq_run,))
-    _save(uuid.UUID(dq_run), "draft", {"domain": "x", "column_tags": {}}, "inferred", False, None)
-    client = ScriptedClient([submit(dq_run, 1)])
-    paused = runner.run(dq_run, fresh=True, client=client, mode="live")
-    assert paused["status"] == "awaiting_context" and client.messages.calls == []
-    resumed = runner.context_approve(dq_run, client=client, mode="live")
-    assert resumed["status"] == "awaiting_approval" and len(client.messages.calls) == 1
+    _save(uuid.UUID(dq_run), "AI draft: test tickets", {"domain": "x", "column_tags": {}}, "inferred", False, None)
+    result, client = run_script(dq_run, [submit(dq_run, 1)])
+    assert result["status"] == "awaiting_approval" and len(client.messages.calls) == 1
+    assert "AI draft: test tickets" in json.dumps(client.messages.calls[0]["messages"])
+
+
+def test_agent_runs_without_context_when_no_draft_is_possible(dq_run, monkeypatch) -> None:
+    from pipeline.llm import LLMCacheMiss
+
+    with transaction() as conn:
+        conn.execute("DELETE FROM meta.dataset_context WHERE run_id = %s", (dq_run,))
+
+    def no_draft(*args, **kwargs):
+        raise LLMCacheMiss("replay mode: no recorded response")
+
+    monkeypatch.setattr(dq_graph, "ensure_context", no_draft)
+    result, client = run_script(dq_run, [submit(dq_run, 1)])
+    assert result["status"] == "awaiting_approval"
+    assert "BUSINESS CONTEXT\\n(none provided)" in json.dumps(client.messages.calls[0]["messages"])
 
 
 def test_compaction_keeps_recent_results_and_feedback() -> None:
@@ -195,3 +209,14 @@ def test_pipeline_sets_the_run_id_not_the_model(dq_run) -> None:
     wrong = {**submission(dq_run), "source_run_id": dq_run[:8] + "-0000-0000-0000-000000000000"}
     result, _ = run_script(dq_run, [[tool_call("submit_rules", wrong, 1)]])
     assert result["status"] == "awaiting_approval" and result["attempts"] == 0
+
+
+def test_leftover_mapping_failure_never_blocks_the_review(dq_run, monkeypatch) -> None:
+    from pipeline.llm import LLMCacheMiss
+
+    def no_answer(*args, **kwargs):
+        raise LLMCacheMiss("replay mode: no recorded response")
+
+    monkeypatch.setattr(dq_graph.mapping_assist, "complete", no_answer)
+    result, _ = run_script(dq_run, [submit(dq_run, 1)])
+    assert result["status"] == "awaiting_approval"

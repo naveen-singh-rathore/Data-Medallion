@@ -1,4 +1,6 @@
-.PHONY: venv up down init-db test lint psql
+.PHONY: venv up down init-db test lint psql ui
+
+UI_PORT ?= 8000
 
 PYTHON ?= $(CURDIR)/.venv/bin/python
 
@@ -23,3 +25,6 @@ lint:
 
 psql:
 	docker compose exec db sh -c 'exec psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+ui:
+	cd backend && $(PYTHON) -m uvicorn pipeline.web.app:app --port $(UI_PORT)

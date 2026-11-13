@@ -1,10 +1,11 @@
 """Business context for a run: written by a human, or drafted by ONE cheap LLM call.
 
 Both can be stored side by side (one row per source); the human row is the one used.
-Human context is approved on entry and costs nothing. Otherwise the cheap model sees
-column names, roles, types and the row count, plus values only for label-like,
-non-sensitive columns (pipeline.privacy); every other column is a pattern + length range.
-The structured draft waits for approval (`context --approve`).
+Human context costs nothing. Otherwise the cheap model sees column names, roles, types and
+the row count, plus values only for label-like, non-sensitive columns (pipeline.privacy);
+every other column is a pattern + length range. Both are in use as soon as they are stored
+(`approved = true`): nobody has to sign off the AI's draft, and a human text, when given,
+still wins. `approve_context` only remains for drafts stored unapproved by older versions.
 """
 
 import json
@@ -287,7 +288,7 @@ def ensure_context(
     draft, call_id = _draft_with_llm(run_id, client)
     if draft["rejected_columns"] or draft["repairs"]:
         log.warning("context draft repaired", rejected=draft["rejected_columns"], repairs=draft["repairs"])
-    _save(run_id, render_text(draft), draft, "inferred", False, call_id)
+    _save(run_id, render_text(draft), draft, "inferred", True, call_id)
     log.info("context stored", source="inferred")
     return get_context(run_id)  # type: ignore[return-value]
 
