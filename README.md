@@ -552,21 +552,6 @@ more code than a 4–5 hour exercise; the time is in [Time spent](#time-spent).
   A new recording would use the file's sha256 and need no seed.
 - **Time spent and "saved me" estimates** below and in the agent section.
 
-## Time spent
-
-TODO(naveen): fill in from `docs/time_log.md` (per step, honest totals; the brief's budget was 4–5 hours).
-
-| Step | Time |
-| --- | --- |
-| Skeleton + bronze | TODO(naveen) |
-| Profiling (v1.0 → v1.3) | TODO(naveen) |
-| LLM client, context, card | TODO(naveen) |
-| Rules engine + DQ agent | TODO(naveen) |
-| UI | TODO(naveen) |
-| Silver build, date investigation | TODO(naveen) |
-| Classification + gold | TODO(naveen) |
-| Submission hardening (lint, refactor, replay) | TODO(naveen) |
-
 ## Decisions
 
 The design in one place: [docs/design.md](docs/design.md). Every decision with its reason and the
