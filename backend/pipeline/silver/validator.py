@@ -30,6 +30,7 @@ from pipeline.silver.rules_schema import (
     NUMBER_STEPS,
     ROW_CHECK_COLUMNS,
     TEXT_STEPS,
+    ColumnRule,
     SilverRules,
 )
 
@@ -136,51 +137,71 @@ def run_facts(run_id: str) -> RunFacts:
 
 
 def _column_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
-    errors = []
+    """Meaning checks per column rule: sources exist, names are free, settings fit the type."""
     names = [c.name for c in rules.columns]
-    for name, n in Counter(names).items():
-        if n > 1:
-            errors.append(f"columns: target name {name!r} used {n} times")
+    errors = [f"columns: target name {name!r} used {n} times" for name, n in Counter(names).items() if n > 1]
     for c in rules.columns:
         where = f"columns ({c.name})"
-        if c.source not in facts.header:
-            errors.append(f"{where}.source: {c.source!r} is not a column of this run")
-        if c.name in OUTPUT_COLUMNS or c.name.startswith("_") or (c.name.endswith("_raw") and c.name[:-4] in names):
-            errors.append(f"{where}.name: {c.name!r} clashes with a reserved output column")
-        if c.type in DATE_TYPES:
-            if not c.parse_formats:
-                errors.append(f"{where}.parse_formats: required for type {c.type}")
-            formats = [format_by_id(f) for f in c.parse_formats]
-            unknown = [f for f, fmt in zip(c.parse_formats, formats, strict=True) if fmt is None]
-            if unknown:
-                errors.append(f"{where}.parse_formats: {unknown_format_message(unknown)}")
-            if any(f and is_ambiguous_shape(f) for f in formats) and not c.day_month_order:
-                errors.append(f"{where}.day_month_order: required (dmy|mdy) for day/month-ambiguous formats")
-        elif c.parse_formats or c.day_month_order:
-            errors.append(f"{where}.parse_formats: only for date/timestamp columns")
-        if c.type != "text" and TEXT_STEPS & set(c.steps):
-            errors.append(f"{where}.steps: {sorted(TEXT_STEPS & set(c.steps))} only apply to text columns")
-        if c.type not in ("integer", "numeric") and NUMBER_STEPS & set(c.steps):
-            errors.append(f"{where}.steps: {sorted(NUMBER_STEPS & set(c.steps))} only apply to integer/numeric columns")
-        if c.type == "boolean" and not (c.boolean_true and c.boolean_false):
-            errors.append(f"{where}: boolean columns need boolean_true and boolean_false")
-        if c.mapping is not None and c.type != "text":
-            errors.append(f"{where}.mapping: only for text columns")
-        if c.mapping:
-            seen: dict[str, str] = {}
-            for target, variants in c.mapping.items():
-                for v in [target, *variants]:
-                    key = normalization_key(v)
-                    if seen.setdefault(key, target) != target:
-                        errors.append(f"{where}.mapping: {v!r} maps to both {seen[key]!r} and {target!r}")
-        if (
-            c.range
-            and isinstance(c.range.min, int | float)
-            and isinstance(c.range.max, int | float)
-            and c.range.min > c.range.max
-        ):
-            errors.append(f"{where}.range: min > max")
+        for check in (_identity_errors, _date_errors, _type_fit_errors, _mapping_errors, _range_errors):
+            errors += check(c, where, facts, names)
     return errors
+
+
+def _identity_errors(c: ColumnRule, where: str, facts: RunFacts, names: list[str]) -> list[str]:
+    errors = []
+    if c.source not in facts.header:
+        errors.append(f"{where}.source: {c.source!r} is not a column of this run")
+    if c.name in OUTPUT_COLUMNS or c.name.startswith("_") or (c.name.endswith("_raw") and c.name[:-4] in names):
+        errors.append(f"{where}.name: {c.name!r} clashes with a reserved output column")
+    return errors
+
+
+def _date_errors(c: ColumnRule, where: str, _facts: RunFacts, _names: list[str]) -> list[str]:
+    if c.type not in DATE_TYPES:
+        return (
+            [f"{where}.parse_formats: only for date/timestamp columns"] if c.parse_formats or c.day_month_order else []
+        )
+    errors = []
+    if not c.parse_formats:
+        errors.append(f"{where}.parse_formats: required for type {c.type}")
+    formats = [format_by_id(f) for f in c.parse_formats]
+    unknown = [f for f, fmt in zip(c.parse_formats, formats, strict=True) if fmt is None]
+    if unknown:
+        errors.append(f"{where}.parse_formats: {unknown_format_message(unknown)}")
+    if any(f and is_ambiguous_shape(f) for f in formats) and not c.day_month_order:
+        errors.append(f"{where}.day_month_order: required (dmy|mdy) for day/month-ambiguous formats")
+    return errors
+
+
+def _type_fit_errors(c: ColumnRule, where: str, _facts: RunFacts, _names: list[str]) -> list[str]:
+    errors = []
+    if c.type != "text" and TEXT_STEPS & set(c.steps):
+        errors.append(f"{where}.steps: {sorted(TEXT_STEPS & set(c.steps))} only apply to text columns")
+    if c.type not in ("integer", "numeric") and NUMBER_STEPS & set(c.steps):
+        errors.append(f"{where}.steps: {sorted(NUMBER_STEPS & set(c.steps))} only apply to integer/numeric columns")
+    if c.type == "boolean" and not (c.boolean_true and c.boolean_false):
+        errors.append(f"{where}: boolean columns need boolean_true and boolean_false")
+    return errors
+
+
+def _mapping_errors(c: ColumnRule, where: str, _facts: RunFacts, _names: list[str]) -> list[str]:
+    errors = []
+    if c.mapping is not None and c.type != "text":
+        errors.append(f"{where}.mapping: only for text columns")
+    seen: dict[str, str] = {}  # a spelling (normalised) may belong to one standard value only
+    for target, variants in (c.mapping or {}).items():
+        for v in [target, *variants]:
+            key = normalization_key(v)
+            if seen.setdefault(key, target) != target:
+                errors.append(f"{where}.mapping: {v!r} maps to both {seen[key]!r} and {target!r}")
+    return errors
+
+
+def _range_errors(c: ColumnRule, where: str, _facts: RunFacts, _names: list[str]) -> list[str]:
+    r = c.range
+    if r is not None and isinstance(r.min, int | float) and isinstance(r.max, int | float) and r.min > r.max:
+        return [f"{where}.range: min > max"]
+    return []
 
 
 def _reference_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
