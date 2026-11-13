@@ -12,6 +12,7 @@ from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -158,128 +159,190 @@ def _stage(key: str, title: str, state: str, summary: str, **extra: Any) -> dict
     return {"key": key, "title": title, "state": state, "summary": summary, **extra}
 
 
-def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | None:
-    run = run_row(run_id)
-    if not run:
-        return None
-    running_step = job["step"] if job and job["state"] == "running" else None
-    failed_step = job["step"] if job and job["state"] == "error" else None
-    profile = _one("SELECT summary, issues FROM meta.dataset_profiles WHERE run_id = %s", (run_id,))
-    context = get_context(run_id)
-    card = latest_card(run_id)
-    agent = agent_snapshot(run_id)
-    agent_metrics = _one("SELECT * FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,))
-    rules, rules_state, _ = current_rules(run_id)
+@dataclass
+class _RunState:
+    """Everything the checkpoint statuses are decided from, read once per overview."""
 
-    def state_for(step: str, done: bool) -> str:
-        if running_step == step:
+    run: dict[str, Any]
+    job: dict[str, Any] | None
+    profile: dict[str, Any] | None
+    context: dict[str, Any] | None
+    card: dict[str, Any] | None
+    agent: dict[str, Any] | None
+    agent_metrics: dict[str, Any] | None
+    rules: SilverRules | None
+    rules_state: str | None
+    build: dict[str, Any] | None
+    gold: dict[str, Any] | None
+    gold_current: bool
+
+    @property
+    def running_step(self) -> str | None:
+        return self.job["step"] if self.job and self.job["state"] == "running" else None
+
+    @property
+    def failed_step(self) -> str | None:
+        return self.job["step"] if self.job and self.job["state"] == "error" else None
+
+    @property
+    def agent_status(self) -> str | None:
+        return (self.agent or {}).get("status")
+
+    @cached_property
+    def silver_current(self) -> bool:
+        """Approved rules, and the stored silver table was built from exactly them (one DB check)."""
+        return self.rules_state == "approved" and bool(self.build) and is_current(self.build, self.rules)
+
+    def state_for(self, step: str, done: bool) -> str:
+        if self.running_step == step:
             return "running"
-        if failed_step == step:
+        if self.failed_step == step:
             return "error"
         return "done" if done else "waiting"
 
-    size = run["file_size_bytes"] or 0
-    stages = [_stage("upload", "File received", "done",
-                     f"{file_label(run['source_file'])} · {size / 1024:,.0f} KB · {run['encoding'] or '?'}")]  # fmt: skip
 
+def _load_run_state(run_id: uuid.UUID, run: dict[str, Any], job: dict[str, Any] | None) -> _RunState:
+    rules, rules_state, _ = current_rules(run_id)
+    gold, gold_current = gold_state(run_id)
+    return _RunState(
+        run=run, job=job,
+        profile=_one("SELECT summary, issues FROM meta.dataset_profiles WHERE run_id = %s", (run_id,)),
+        context=get_context(run_id), card=latest_card(run_id), agent=agent_snapshot(run_id),
+        agent_metrics=_one("SELECT * FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,)),
+        rules=rules, rules_state=rules_state, build=latest_build(run_id), gold=gold, gold_current=gold_current,
+    )  # fmt: skip
+
+
+def _upload_stage(st: _RunState) -> dict[str, Any]:
+    run, size = st.run, st.run["file_size_bytes"] or 0
+    return _stage("upload", "File received", "done",
+                  f"{file_label(run['source_file'])} · {size / 1024:,.0f} KB · {run['encoding'] or '?'}")  # fmt: skip
+
+
+def _bronze_stage(st: _RunState) -> dict[str, Any]:
+    run = st.run
     loaded = (run["rows_loaded_ok"] or 0) + (run["rows_loaded_malformed"] or 0)
-    bronze_state = {"succeeded": "done", "failed": "error", "running": "running"}[run["status"]]
-    stages.append(_stage("bronze", "Raw data landed (Bronze)", bronze_state,
-                         f"{loaded:,} of {run['records_parsed'] or 0:,} records stored, nothing changed"
-                         if run["status"] == "succeeded" else (run["error_message"] or "loading")))  # fmt: skip
+    state = {"succeeded": "done", "failed": "error", "running": "running"}[run["status"]]
+    return _stage("bronze", "Raw data landed (Bronze)", state,
+                  f"{loaded:,} of {run['records_parsed'] or 0:,} records stored, nothing changed"
+                  if run["status"] == "succeeded" else (run["error_message"] or "loading"))  # fmt: skip
 
-    issues = profile["issues"] if profile else []
+
+def _profile_stage(st: _RunState) -> dict[str, Any]:
+    issues = st.profile["issues"] if st.profile else []
     by_sev = Counter(i["severity"] for i in issues)
-    stages.append(_stage("profile", "Health check (profiling)", state_for("profile", profile is not None),
-                         f"{len(issues)} issues found: {by_sev['high']} high, {by_sev['medium']} medium, {by_sev['low']} low"
-                         if profile else "not run yet"))  # fmt: skip
+    return _stage("profile", "Health check (profiling)", st.state_for("profile", st.profile is not None),
+                  f"{len(issues)} issues found: {by_sev['high']} high, {by_sev['medium']} medium, {by_sev['low']} low"
+                  if st.profile else "not run yet")  # fmt: skip
 
+
+def _context_stage(st: _RunState) -> dict[str, Any]:
     # The AI decides the context; nobody has to approve it. A person may still overwrite it.
-    if context:
-        ctx_state = "done"
-        ctx_summary = "Written by a person" if context["source"] == "human" else "Decided by AI"
-    elif profile is not None and running_step is None:
+    if st.context:
+        state, summary = "done", "Written by a person" if st.context["source"] == "human" else "Decided by AI"
+    elif st.profile is not None and st.running_step is None:
         # The draft failed (logged, not fatal): the AI retries when the review starts, else runs without it.
-        ctx_state, ctx_summary = "error", "AI could not write it yet; the review will retry"
+        state, summary = "error", "AI could not write it yet; the review will retry"
     else:
-        ctx_state, ctx_summary = "waiting", "AI writes it after the health check"
-    if running_step == "context":
-        ctx_state = "running"
-    stages.append(_stage("context", "Business context", ctx_state, ctx_summary))
+        state, summary = "waiting", "AI writes it after the health check"
+    if st.running_step == "context":
+        state = "running"
+    return _stage("context", "Business context", state, summary)
 
-    stages.append(_stage("card", "AI briefing prepared", state_for("card", card is not None),
-                         f"{card['issues_shown']}/{card['issues_total']} issues summarised in "
-                         f"~{(card['exact_tokens'] or card['est_tokens']):,} tokens" if card else "not prepared yet"))  # fmt: skip
 
-    status = (agent or {}).get("status")
-    if running_step in ("agent", "resume"):
-        agent_state, agent_summary = "running", "the AI is investigating the data"
-    elif not agent and rules_state == "approved":
-        agent_state, agent_summary = "done", "not run here: the approved rules come from the repository"
-    elif not agent and failed_step == "agent" and job:
-        agent_state, agent_summary = "error", job["error"]
-    elif not agent:
+def _card_stage(st: _RunState) -> dict[str, Any]:
+    card = st.card
+    return _stage("card", "AI briefing prepared", st.state_for("card", card is not None),
+                  f"{card['issues_shown']}/{card['issues_total']} issues summarised in "
+                  f"~{(card['exact_tokens'] or card['est_tokens']):,} tokens" if card else "not prepared yet")  # fmt: skip
+
+
+def _agent_stage(st: _RunState) -> dict[str, Any]:
+    if st.running_step in ("agent", "resume"):
+        state, summary = "running", "the AI is investigating the data"
+    elif not st.agent and st.rules_state == "approved":
+        state, summary = "done", "not run here: the approved rules come from the repository"
+    elif not st.agent and st.failed_step == "agent" and st.job:
+        state, summary = "error", st.job["error"]
+    elif not st.agent:
         # Starting the review is the person's call (it costs money), so it is a task once the briefing exists.
-        agent_state, agent_summary = ("action", "ready: start the AI review") if card else ("waiting", "not started")
-    elif status == "failed":
-        agent_state, agent_summary = "error", "the AI could not produce valid rules"
-    elif agent and agent.get("interrupted"):
-        agent_state, agent_summary = "action", "stopped before finishing; resume it"
+        state, summary = ("action", "ready: start the AI review") if st.card else ("waiting", "not started")
+    elif st.agent_status == "failed":
+        state, summary = "error", "the AI could not produce valid rules"
+    elif st.agent.get("interrupted"):
+        state, summary = "action", "stopped before finishing; resume it"
     else:
-        m = agent_metrics or {}
-        agent_state = "done"
-        agent_summary = (
-            f"{m.get('turns', 0)} steps, {m.get('tool_calls', 0)} checks, ${float(m.get('cost_usd') or 0):.2f}"
-        )
-    stages.append(_stage("agent", "AI quality review", agent_state, agent_summary))
+        m = st.agent_metrics or {}
+        state = "done"
+        summary = f"{m.get('turns', 0)} steps, {m.get('tool_calls', 0)} checks, ${float(m.get('cost_usd') or 0):.2f}"
+    return _stage("agent", "AI quality review", state, summary)
 
-    if status == "awaiting_approval":
+
+def _approval_stage(st: _RunState) -> dict[str, Any]:
+    if st.running_step == "resume":
+        approval = ("running", "applying your decision")
+    elif st.running_step == "automap":
+        approval = ("running", "the AI is deciding leftover values")
+    elif st.agent_status == "awaiting_approval":
         approval = ("action", "rules ready; waiting for your decision")
-    elif status == "approved" or rules_state == "approved":
+    elif st.agent_status == "approved" or st.rules_state == "approved":
         approval = ("done", "approved")
-    elif status == "rejected":
+    elif st.agent_status == "rejected":
         approval = ("error", "rejected")
     else:
         approval = ("waiting", "no rules proposed yet")
-    if running_step == "resume":
-        approval = ("running", "applying your decision")
-    elif running_step == "automap":
-        approval = ("running", "the AI is deciding leftover values")
-    stages.append(_stage("approval", "Your approval", *approval))
+    return _stage("approval", "Your approval", *approval)
 
-    build = latest_build(run_id)
-    if running_step == "build":
+
+def _silver_stage(st: _RunState) -> dict[str, Any]:
+    build = st.build
+    if st.running_step == "build":
         silver = ("running", "building the cleaned table")
-    elif rules is None:
+    elif st.rules is None:
         silver = ("waiting", "available once rules are proposed")
-    elif rules_state == "approved" and is_current(build, rules):
-        usable = (build["rows_kept"] or 0) + (build["rows_flagged"] or 0)
-        silver = ("done", f"{usable:,} usable rows stored in {build['target_table']}")
-    elif rules_state == "approved" and build and build["status"] == "failed":
+    elif st.silver_current:
+        usable = (build["rows_kept"] or 0) + (build["rows_flagged"] or 0)  # type: ignore[index]
+        silver = ("done", f"{usable:,} usable rows stored in {build['target_table']}")  # type: ignore[index]
+    elif st.rules_state == "approved" and build and build["status"] == "failed":
         silver = ("error", "build failed: " + (build["error_message"] or "")[:120])
-    elif rules_state == "approved":
+    elif st.rules_state == "approved":
         silver = ("action", "rules approved; the cleaned table is not built yet")
     else:
         silver = ("preview", "preview of the proposed rules")
-    stages.append(_stage("silver", "Cleaned data (Silver)", *silver))
-    g, g_current = gold_state(run_id)
-    if running_step == "gold":
+    return _stage("silver", "Cleaned data (Silver)", *silver)
+
+
+def _gold_stage(st: _RunState) -> dict[str, Any]:
+    g = st.gold
+    if st.running_step == "gold":
         gold = ("running", "building the business tables")
-    elif g and g_current:
+    elif g and st.gold_current:
         gold = ("done", f"{(g['row_counts'] or {}).get('fact_tickets', 0):,} tickets in 4 tables + findings")
     elif g and g["status"] == "failed":
         gold = ("error", "build failed: " + (g["error_message"] or "")[:120])
-    elif build and is_current(build, rules) and rules_state == "approved":
+    elif st.silver_current:
         gold = ("action", "cleaned data changed; build the business tables" if g else "ready to build")
     else:
         gold = ("waiting", "available once the cleaned table is built")
-    stages.append(_stage("gold", "Business tables (Gold)", *gold))
+    return _stage("gold", "Business tables (Gold)", *gold)
 
+
+STAGES = (_upload_stage, _bronze_stage, _profile_stage, _context_stage, _card_stage, _agent_stage,
+          _approval_stage, _silver_stage, _gold_stage)  # fmt: skip
+
+
+def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The nine checkpoints of a run, each with a state (done/running/action/error/...) and a summary."""
+    run = run_row(run_id)
+    if not run:
+        return None
+    st = _load_run_state(run_id, run, job)
+    build, agent = st.build, st.agent
     return jsonable({
         "run_id": run_id, "file": file_label(run["source_file"]), "started_at": run["started_at"],
-        "stages": stages, "job": job, "llm_mode": settings.llm_mode, "agent": agent and {
+        "stages": [stage(st) for stage in STAGES], "job": job, "llm_mode": settings.llm_mode, "agent": agent and {
             k: agent.get(k) for k in ("status", "paused", "turns", "tool_calls", "interrupted")},
-        "rules_state": rules_state,
+        "rules_state": st.rules_state,
         "build": build and {k: build[k] for k in ("build_id", "status", "target_table", "rules_hash", "started_at",
                                                   "duration_ms", "rows_in", "rows_kept", "rows_flagged",
                                                   "rows_rejected", "rows_duplicate", "error_message")},

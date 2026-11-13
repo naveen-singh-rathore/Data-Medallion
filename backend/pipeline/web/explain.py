@@ -4,6 +4,7 @@ Pure functions over the pipeline's own facts (profile issues, rules, tool calls)
 reader sees "14 rows say 'n/a' instead of a ticket id" rather than `NULLTOK:ticket_id`.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 SEVERITY = {
@@ -62,44 +63,75 @@ def _tokens(examples: dict[str, int]) -> str:
     return ", ".join(f"'{k}' ({_n(v)})" for k, v in examples.items())
 
 
+def _date_order(col: str, ev: dict[str, Any]) -> str:
+    a, _, b = col.partition(" > ")
+    return (
+        f"In {_n(ev.get('count'))} of {_n(ev.get('compared'))} rows ({_pct(ev.get('share'))}), {a} is later than {b}."
+    )
+
+
+def _mixed_date_formats(col: str, ev: dict[str, Any]) -> str:
+    shown = "; ".join(f"{e['format']} ({_pct(e['share'])}, e.g. {e['example']})" for e in ev.get("examples", []))
+    return f"{col} uses {ev.get('format_count')} different date formats. Most common: {shown}."
+
+
+def _ambiguous_dates(col: str, ev: dict[str, Any]) -> str:
+    return (f"{_n(ev.get('ambiguous'))} values in {col} could be read either way. The data itself shows "
+            f"{_n(ev.get('mdy_evidence'))} month-first and {_n(ev.get('dmy_evidence'))} day-first values.")  # fmt: skip
+
+
+def _sentinels(col: str, ev: dict[str, Any]) -> str:
+    shown = ", ".join(f"'{e['value']}' ({_n(e['count'])})" for e in ev.get("examples", []))
+    return f"{_pct(ev.get('share'))} of {col} are placeholder values: {shown}."
+
+
+def _variants(col: str, ev: dict[str, Any]) -> str:
+    groups = ev.get("examples", [])
+    shown = "; ".join(" / ".join(f"'{v}' ({_n(c)})" for v, c in g) for g in groups[:2] if isinstance(g, list))
+    return f"{_n(ev.get('groups'))} values in {col} are spelled several ways, e.g. {shown}."
+
+
+def _mixed_types(col: str, ev: dict[str, Any]) -> str:
+    examples = ev.get("examples", {})
+    return f"{_pct(ev.get('text_share'))} of {col} is text, not a number (e.g. '{examples.get('text', '')}')."
+
+
+def _numbers_in_text(col: str, ev: dict[str, Any]) -> str:
+    return (f"{_n(ev.get('count'))} values in {col} carry symbols, e.g. {', '.join(ev.get('examples', []))}; "
+            f"{_pct(ev.get('numeric_after_cleanup'))} become numbers once cleaned.")  # fmt: skip
+
+
+# issue code -> (column label, evidence) -> one plain sentence with the issue's own numbers
+ISSUE_SENTENCES: dict[str, Callable[[str, dict[str, Any]], str]] = {
+    "DATE_ORDER": _date_order,
+    "MIXED_DATE_FORMATS": _mixed_date_formats,
+    "AMBIGUOUS_DATES": _ambiguous_dates,
+    "NULL_LIKE_TOKENS": lambda col, ev: (
+        f"{_n(ev.get('count'))} values in {col} are placeholders: {_tokens(ev.get('examples', {}))}."
+    ),
+    "SENTINEL_VALUES": _sentinels,
+    "UNPARSED_DATES": lambda col, ev: (
+        f"{_n(ev.get('count'))} values in {col} are not dates, e.g. {', '.join(map(repr, ev.get('examples', [])))}."
+    ),
+    "HIGH_EMPTY_RATE": lambda col, ev: (
+        f"{_n(ev.get('count'))} values ({_pct(ev.get('share'))}) in {col} are empty or placeholders."
+    ),
+    "NORMALIZATION_VARIANTS": _variants,
+    "TYPO_VARIANTS": _variants,
+    "WHITESPACE": lambda col, ev: f"{_n(ev.get('leading_trailing'))} values in {col} have spaces at the start or end.",
+    "MIXED_TYPES": _mixed_types,
+    "NUMBERS_IN_TEXT": _numbers_in_text,
+    "PARTIAL_ROWS": lambda _col, ev: (
+        f"{_n(ev.get('count'))} rows are missing at least {ev.get('min_missing_cells')} fields."
+    ),
+}
+
+
 def issue_sentence(issue: dict[str, Any]) -> str:
-    """One sentence with the issue's own numbers."""
+    """One sentence with the issue's own numbers (a generic count sentence for codes without a renderer)."""
     code, col, ev = issue["code"], issue.get("column") or "the dataset", issue.get("evidence") or {}
-    if code == "DATE_ORDER":
-        a, _, b = col.partition(" > ")
-        return (f"In {_n(ev.get('count'))} of {_n(ev.get('compared'))} rows ({_pct(ev.get('share'))}), "
-                f"{a} is later than {b}.")  # fmt: skip
-    if code == "MIXED_DATE_FORMATS":
-        shown = "; ".join(f"{e['format']} ({_pct(e['share'])}, e.g. {e['example']})" for e in ev.get("examples", []))
-        return f"{col} uses {ev.get('format_count')} different date formats. Most common: {shown}."
-    if code == "AMBIGUOUS_DATES":
-        return (f"{_n(ev.get('ambiguous'))} values in {col} could be read either way. The data itself shows "
-                f"{_n(ev.get('mdy_evidence'))} month-first and {_n(ev.get('dmy_evidence'))} day-first values.")  # fmt: skip
-    if code == "NULL_LIKE_TOKENS":
-        return f"{_n(ev.get('count'))} values in {col} are placeholders: {_tokens(ev.get('examples', {}))}."
-    if code == "SENTINEL_VALUES":
-        shown = ", ".join(f"'{e['value']}' ({_n(e['count'])})" for e in ev.get("examples", []))
-        return f"{_pct(ev.get('share'))} of {col} are placeholder values: {shown}."
-    if code == "UNPARSED_DATES":
-        return (
-            f"{_n(ev.get('count'))} values in {col} are not dates, e.g. {', '.join(map(repr, ev.get('examples', [])))}."
-        )
-    if code == "HIGH_EMPTY_RATE":
-        return f"{_n(ev.get('count'))} values ({_pct(ev.get('share'))}) in {col} are empty or placeholders."
-    if code == "NORMALIZATION_VARIANTS" or code == "TYPO_VARIANTS":
-        groups = ev.get("examples", [])
-        shown = "; ".join(" / ".join(f"'{v}' ({_n(c)})" for v, c in g) for g in groups[:2] if isinstance(g, list))
-        return f"{_n(ev.get('groups'))} values in {col} are spelled several ways, e.g. {shown}."
-    if code == "WHITESPACE":
-        return f"{_n(ev.get('leading_trailing'))} values in {col} have spaces at the start or end."
-    if code == "MIXED_TYPES":
-        examples = ev.get("examples", {})
-        return f"{_pct(ev.get('text_share'))} of {col} is text, not a number (e.g. '{examples.get('text', '')}')."
-    if code == "NUMBERS_IN_TEXT":
-        return (f"{_n(ev.get('count'))} values in {col} carry symbols, e.g. {', '.join(ev.get('examples', []))}; "
-                f"{_pct(ev.get('numeric_after_cleanup'))} become numbers once cleaned.")  # fmt: skip
-    if code == "PARTIAL_ROWS":
-        return f"{_n(ev.get('count'))} rows are missing at least {ev.get('min_missing_cells')} fields."
+    if render := ISSUE_SENTENCES.get(code):
+        return render(col, ev)
     if "count" in ev:
         share = f" ({_pct(ev['share'])})" if "share" in ev else ""
         return f"{_n(ev['count'])} values{share} in {col}."
@@ -235,29 +267,40 @@ def describe_dedup(dedup: dict[str, Any]) -> str:
 # --- agent tools -------------------------------------------------------------------------
 
 
-def describe_tool_call(tool: str, args: dict[str, Any]) -> str:
+def _list_issues(args: dict[str, Any]) -> str:
     col = args.get("column")
-    if tool == "list_issues":
-        scope = " ".join(x for x in [args.get("severity"), "issues", f"for {col}" if col else ""] if x)
-        return f"Listed {scope}"
-    if tool == "get_column_profile":
-        return f"Read the full health check of {col}"
-    if tool == "get_value_counts":
-        how = " grouped by spelling" if args.get("normalized") else ""
-        mask = f" matching the shape {args['pattern_mask']}" if args.get("pattern_mask") else ""
-        return f"Counted the values of {col}{how}{mask}"
-    if tool == "sample_rows":
-        return f"Looked at {args.get('n', 'a few')} sample row(s)"
-    if tool == "check_regex":
-        return f"Checked how many {col} values match the pattern {args.get('pattern')}"
-    if tool == "test_rule":
-        rule = args.get("column_rule") or {}
-        return f"Tried a cleaning rule for {rule.get('name') or rule.get('source')} on 2,000 sample rows"
-    if tool == "check_cross_column":
-        return f"Compared {args.get('a')} with {args.get('b')} row by row"
-    if tool == "submit_rules":
-        return "Submitted the cleaning rules for validation"
-    return f"Called {tool}"
+    scope = " ".join(x for x in [args.get("severity"), "issues", f"for {col}" if col else ""] if x)
+    return f"Listed {scope}"
+
+
+def _value_counts(args: dict[str, Any]) -> str:
+    how = " grouped by spelling" if args.get("normalized") else ""
+    mask = f" matching the shape {args['pattern_mask']}" if args.get("pattern_mask") else ""
+    return f"Counted the values of {args.get('column')}{how}{mask}"
+
+
+def _test_rule(args: dict[str, Any]) -> str:
+    rule = args.get("column_rule") or {}
+    return f"Tried a cleaning rule for {rule.get('name') or rule.get('source')} on 2,000 sample rows"
+
+
+# agent tool -> its arguments -> what the agent did, in plain words (shown in the review transcript)
+TOOL_CALLS: dict[str, Callable[[dict[str, Any]], str]] = {
+    "list_issues": _list_issues,
+    "get_column_profile": lambda a: f"Read the full health check of {a.get('column')}",
+    "get_value_counts": _value_counts,
+    "sample_rows": lambda a: f"Looked at {a.get('n', 'a few')} sample row(s)",
+    "check_regex": lambda a: f"Checked how many {a.get('column')} values match the pattern {a.get('pattern')}",
+    "test_rule": _test_rule,
+    "check_cross_column": lambda a: f"Compared {a.get('a')} with {a.get('b')} row by row",
+    "submit_rules": lambda _a: "Submitted the cleaning rules for validation",
+}
+
+
+def describe_tool_call(tool: str, args: dict[str, Any]) -> str:
+    """One plain-language line for an agent tool call."""
+    render = TOOL_CALLS.get(tool)
+    return render(args) if render else f"Called {tool}"
 
 
 ERRORS = {
