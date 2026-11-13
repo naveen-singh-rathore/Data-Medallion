@@ -212,8 +212,11 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
         agent_state, agent_summary = "running", "the AI is investigating the data"
     elif not agent and rules_state == "approved":
         agent_state, agent_summary = "done", "not run here: the approved rules come from the repository"
+    elif not agent and failed_step == "agent" and job:
+        agent_state, agent_summary = "error", job["error"]
     elif not agent:
-        agent_state, agent_summary = ("error", job["error"]) if failed_step == "agent" and job else ("waiting", "not started")
+        # Starting the review is the person's call (it costs money), so it is a task once the briefing exists.
+        agent_state, agent_summary = ("action", "ready: start the AI review") if card else ("waiting", "not started")
     elif status == "failed":
         agent_state, agent_summary = "error", "the AI could not produce valid rules"
     elif agent and agent.get("interrupted"):

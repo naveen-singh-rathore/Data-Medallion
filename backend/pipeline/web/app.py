@@ -143,6 +143,13 @@ def context_save(run_id: uuid.UUID, body: ContextIn) -> dict[str, Any]:
     return _busy(lambda: jobs.save_human_context(run_id, body.text))
 
 
+@app.post("/api/runs/{run_id}/context/retry")
+def context_retry(run_id: uuid.UUID) -> dict[str, Any]:
+    """Ask the AI for the business context again (e.g. after the API was briefly unavailable)."""
+    _found(views.run_row(run_id), "run not found")
+    return _busy(lambda: jobs.retry_context(run_id))
+
+
 @app.post("/api/runs/{run_id}/reprofile")
 def reprofile(run_id: uuid.UUID) -> dict[str, Any]:
     return _busy(lambda: jobs.start_reprofile(run_id))

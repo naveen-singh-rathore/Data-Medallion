@@ -111,11 +111,19 @@ def test_upload_lands_profiles_and_explains_every_checkpoint(client) -> None:
     assert stages["bronze"]["state"] == "done" and "12 of 12 records" in stages["bronze"]["summary"]
     assert stages["profile"]["state"] == "done"
     assert stages["card"]["state"] == "done"
-    # the AI draft failed: shown as a problem the review retries, never as a task for the user
+    # the AI draft failed: shown as a problem the review retries, never as a task for the user;
+    # the one task is starting the review, which is where the UI lands (not on the failed draft)
     assert stages["context"]["state"] == "error" and "retry" in stages["context"]["summary"]
-    assert not any(s["state"] == "action" for s in ov["stages"])
+    assert [k for k, s in stages.items() if s["state"] == "action"] == ["agent"]
     assert any(e["step"] == "context" and e["state"] == "error" for e in ov["job"]["events"])
-    assert stages["agent"]["state"] == "waiting" and stages["silver"]["state"] == "waiting"
+    assert stages["silver"]["state"] == "waiting"
+
+    # the draft can be retried on demand; in replay it fails again the same way, and the briefing stays ready
+    assert c.post(f"/api/runs/{run_id}/context/retry").json()["kind"] == "context"
+    ov = _wait(c, run_id)
+    stages = {s["key"]: s for s in ov["stages"]}
+    assert stages["context"]["state"] == "error" and stages["card"]["state"] == "done"
+    assert any(e["step"] == "context" and e["state"] == "error" for e in ov["job"]["events"])
 
     # same bytes again: idempotent, the existing run is shown
     assert _upload(c) == {"run_id": run_id, "duplicate": True}

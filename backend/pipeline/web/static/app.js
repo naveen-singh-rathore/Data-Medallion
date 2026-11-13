@@ -461,7 +461,8 @@ PANELS.context = async (ov) => {
   const used = c.used;
   const d = used && used.draft;
   return h`
-    ${!used ? h`<div class="callout ${ov.stages.find((s) => s.key === "context").state === "error" ? "warn" : ""}">${ov.llm_mode === "replay" ? "The AI is in replay mode and has no recorded answer for this file, so it could not write the business context. " : "The AI has not written the business context yet. "}The AI review tries again when it starts, and runs without it if it still cannot.</div>` : ""}
+    ${!used ? h`<div class="callout ${ov.stages.find((s) => s.key === "context").state === "error" ? "warn" : ""}">${ov.llm_mode === "replay" ? "The AI is in replay mode and has no recorded answer for this file, so it could not write the business context. " : "The AI has not written the business context yet. "}The AI review tries again when it starts, and runs without it if it still cannot.
+      ${ov.llm_mode !== "replay" ? h`<div class="row"><button class="btn" data-act="ctxretry">Try again now</button></div>` : ""}</div>` : ""}
     ${used ? h`<div class="stack">
       <div class="row"><span class="pill ${used.source === "human" ? "human" : "agent"}">${used.source === "human" ? "written by a person" : "decided by AI"}</span>
         ${used.model ? h`<span class="small muted">${used.model} · ${num(used.input_tokens)} in / ${num(used.output_tokens)} out tokens · ${money(used.cost_usd)}${used.cache_hit ? " (replayed, $0)" : ""}</span>` : ""}</div>
@@ -1138,6 +1139,7 @@ const ACTIONS = {
   sshow: (el) => { silverTable.show = el.dataset.v; silverTable.offset = 0; el.parentElement.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === el)); loadSilverRows(); },
   spage: (el) => { silverTable.offset = Math.max(0, silverTable.offset + Number(el.dataset.d) * silverTable.limit); loadSilverRows(); },
   sev: (el) => { profileState.sev = el.dataset.v; loadPanel(true); },
+  ctxretry: () => act(() => api(`/runs/${state.runId}/context/retry`, { method: "POST" }), "Asking the AI again"),
   ctxsave: () => act(() => api(`/runs/${state.runId}/context`, { method: "POST", body: { text: $("#ctxtext").value } }), "Description saved"),
   agentstart: () => act(() => api(`/runs/${state.runId}/agent/start`, { method: "POST", body: { fresh: false } }), "AI review started"),
   agentresume: () => act(() => api(`/runs/${state.runId}/agent/start`, { method: "POST", body: { fresh: false } }), "Resuming the AI review"),

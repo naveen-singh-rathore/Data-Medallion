@@ -117,6 +117,16 @@ def start_reprofile(run_id: uuid.UUID) -> dict[str, Any]:
     return start_intake(run_id)
 
 
+def retry_context(run_id: uuid.UUID) -> dict[str, Any]:
+    """Draft the business context again (after a failed draft), then refresh the briefing."""
+
+    def work(job: Job) -> None:
+        _draft_context(job, run_id)
+        _card(job, run_id)
+
+    return _start(run_id, "context", work)
+
+
 def save_human_context(run_id: uuid.UUID, text: str) -> dict[str, Any]:
     def work(job: Job) -> None:
         _step(job, "context", "Saving your business description")
