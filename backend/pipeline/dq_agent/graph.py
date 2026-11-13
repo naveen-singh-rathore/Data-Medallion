@@ -65,6 +65,8 @@ FORCE_MESSAGE = ("Tool budget used. Call submit_rules now with your best rules; 
 
 
 class State(TypedDict, total=False):
+    """The checkpointed graph state (one thread per review)."""
+
     run_id: str
     thread_id: str
     card: str
@@ -92,6 +94,7 @@ class State(TypedDict, total=False):
 
 
 def run_dir(run_id: str) -> Path:
+    """Folder for a run's review files (proposal, validation, decisions)."""
     return RULES_DIR / run_id
 
 
@@ -120,19 +123,48 @@ def _elapsed_ms(state: State) -> int:
     return int((datetime.now(UTC) - started).total_seconds() * 1000)
 
 
-def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None = None) -> Any:
-    """Compile the graph. `client`/`mode` are passed to every LLM call (tests inject a fake client)."""
-    log = get_logger("dq_agent")
+class DQAgentGraph:
+    """The nodes and routing of the DQ agent. One instance per compiled graph.
 
-    # --- prepare --------------------------------------------------------------------------
-    def prepare(state: State) -> dict[str, Any]:
+    `client` and `mode` are passed to every LLM call (tests inject a fake client; replay/live/record).
+    Nodes return partial state updates; LangGraph merges them (`messages` is append-only).
+    """
+
+    NODES = ("prepare", "agent", "tools", "force_submit", "validate", "map_leftovers", "give_up", "approve", "save")
+
+    def __init__(self, client: Any = None, mode: str | None = None) -> None:
+        self.client = client
+        self.mode = mode
+        self.log = get_logger("dq_agent")
+
+    def compile(self, checkpointer: Any = None) -> Any:
+        """Wire the nodes and edges (see the module docstring) and compile with the checkpointer."""
+        graph = StateGraph(State)
+        for name in self.NODES:
+            graph.add_node(name, getattr(self, name))
+        graph.add_edge(START, "prepare")
+        graph.add_edge("prepare", "agent")
+        graph.add_conditional_edges("agent", self.route_agent, ["tools", "validate", "force_submit", "give_up"])
+        graph.add_edge("tools", "agent")
+        graph.add_edge("force_submit", "agent")
+        graph.add_conditional_edges("validate", self.route_validate, ["map_leftovers", "agent", END])
+        graph.add_edge("map_leftovers", "approve")
+        graph.add_edge("give_up", END)
+        graph.add_conditional_edges("approve", self.route_approve, ["save", "approve", END])
+        graph.add_edge("save", END)
+        return graph.compile(checkpointer=checkpointer)
+
+    # --- prepare: context, card and the task message ----------------------------------------
+
+    def prepare(self, state: State) -> dict[str, Any]:
+        """Build everything the agent reads: business context, dataset card, flagged columns, required issues."""
         run_id = uuid.UUID(state["run_id"])
         try:
-            context: dict[str, Any] | None = ensure_context(run_id, client=client)
+            context: dict[str, Any] | None = ensure_context(run_id, client=self.client)
         except LLMError as exc:  # no draft possible (e.g. replay without a recording): go on without one
-            log.warning("context unavailable, continuing without it", run_id=state["run_id"], error=str(exc)[:200])
+            self.log.warning("context unavailable, continuing without it", run_id=state["run_id"], error=str(exc)[:200])
             context = None
-        card = render_card(run_id, exact=settings.llm_mode != "replay" and mode != "replay").text
+        card = render_card(run_id, exact=settings.llm_mode != "replay" and self.mode != "replay").text
         profile = load_profile(run_id)
         flagged = sorted(flagged_columns(profile["issues"]), key=[p["column"] for p in profile["columns"]].index)
         defaults = default_rules(run_id)
@@ -141,18 +173,20 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
         return {"card": card, "flagged_columns": flagged, "default_rules": defaults.model_dump(mode="json"),
                 "required_ids": required, "messages": [{"role": "user", "content": task}], "status": "running"}  # fmt: skip
 
-    # --- agent ----------------------------------------------------------------------------
-    def agent(state: State) -> dict[str, Any]:
+    # --- the tool loop ----------------------------------------------------------------------
+
+    def agent(self, state: State) -> dict[str, Any]:
+        """One model turn. After force_submit only submit_rules is offered."""
         tools = [submit_rules_tool()] if state.get("forced") else [*tool_schemas(), submit_rules_tool()]
         request = with_cache_points(compact(state["messages"]))
         system = [{"type": "text", "text": system_prompt(), "cache_control": {"type": "ephemeral"}}]
         result = call_llm("dq_agent", settings.main_model, request, PROMPT_VERSION, uuid.UUID(state["run_id"]),
                           tools=tools, system=system, effort="high", options=request_options(settings.main_model),
-                          mode=mode, client=client)  # fmt: skip
+                          mode=self.mode, client=self.client)  # fmt: skip
         turns = state.get("turns", 0) + 1
-        log.info("agent turn", run_id=state["run_id"], turn=turns, input_tokens=result.input_tokens,
-                 cached_tokens=result.cached_tokens, output_tokens=result.output_tokens,
-                 tool_uses=[b["name"] for b in result.content if b.get("type") == "tool_use"])  # fmt: skip
+        self.log.info("agent turn", run_id=state["run_id"], turn=turns, input_tokens=result.input_tokens,
+                      cached_tokens=result.cached_tokens, output_tokens=result.output_tokens,
+                      tool_uses=[b["name"] for b in result.content if b.get("type") == "tool_use"])  # fmt: skip
         return {
             "messages": [{"role": "assistant", "content": [clean_block(b) for b in result.content]}],
             "turns": turns,
@@ -162,7 +196,9 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
             "cost_usd": round(state.get("cost_usd", 0.0) + float(result.cost_usd), 6),
         }
 
+    @staticmethod
     def route_agent(state: State) -> str:
+        """submit_rules -> validate; budget used or no tool call -> force_submit; runaway -> give_up."""
         uses = tool_uses(state["messages"][-1])
         if any(u["name"] == SUBMIT_TOOL for u in uses):
             return "validate"
@@ -173,20 +209,21 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
             return "force_submit"
         return "tools"
 
-    # --- tools ----------------------------------------------------------------------------
+    @staticmethod
     def tools(state: State) -> dict[str, Any]:
+        """Run the requested read-only tools; tool errors come back to the model as results, never raise."""
         uses = tool_uses(state["messages"][-1])
         by_name = dict(state.get("tool_calls_by_name", {}))
         results = []
         for use in uses:
-            response = run_tool(use["name"], use.get("input") or {}, state["run_id"])  # errors come back, not raised
+            response = run_tool(use["name"], use.get("input") or {}, state["run_id"])
             results.append(tool_result(use["id"], json.dumps(response, ensure_ascii=False, default=str),
                                        is_error=not response["ok"]))  # fmt: skip
             by_name[use["name"]] = by_name.get(use["name"], 0) + 1
         return {"messages": [{"role": "user", "content": results}], "tool_calls": state.get("tool_calls", 0) + len(uses),
                 "tool_calls_by_name": by_name}  # fmt: skip
 
-    # --- force_submit ---------------------------------------------------------------------
+    @staticmethod
     def force_submit(state: State) -> dict[str, Any]:
         """Answer any pending calls without running them, then ask for submit_rules (only tool left)."""
         pending = [tool_result(u["id"], "Not run: tool budget used.", is_error=True)
@@ -194,84 +231,93 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
         return {"messages": [{"role": "user", "content": [*pending, {"type": "text", "text": FORCE_MESSAGE}]}],
                 "forced": True}  # fmt: skip
 
-    # --- validate -------------------------------------------------------------------------
-    def validate(state: State) -> dict[str, Any]:
+    @staticmethod
+    def give_up(state: State) -> dict[str, Any]:
+        """The model kept answering without submitting: end as failed."""
+        update = {"status": "failed", "duration_ms": _elapsed_ms(state)}
+        metrics.write_agent_run({**state, **update}, "failed")
+        return update
+
+    # --- validate ---------------------------------------------------------------------------
+
+    def validate(self, state: State) -> dict[str, Any]:
+        """Merge the submission with the default rules and run the four-layer validator."""
         uses = tool_uses(state["messages"][-1])
         submit = next(u for u in uses if u["name"] == SUBMIT_TOOL)
         others = [tool_result(u["id"], "Not run: submit_rules ends the investigation.", is_error=True)
                   for u in uses if u is not submit]  # fmt: skip
-        defaults = SilverRules.model_validate(state["default_rules"])
-        # The pipeline owns the run id (the card shows only a short form); never trust the model's copy.
-        submitted = {**(submit.get("input") or {}), "source_run_id": state["run_id"]}
-        rules, schema_errors = check_schema(submitted)
-        if rules is None:
-            report_dict = {"ok": False, "layer": "schema", "errors": schema_errors, "warnings": [], "stats": {}}
-            merged = None
-        else:
-            merged = merge_rules(defaults, rules.model_copy(update={"generated_by": "agent"}))
-            report = validate_rules(merged, state["run_id"])
-            report_dict = {"ok": report.ok, "layer": report.layer, "errors": report.errors, "warnings": report.warnings,
-                           "stats": report.stats}  # fmt: skip
-        update: dict[str, Any] = {"validation": report_dict}
+        merged, report = _check_submission(submit.get("input") or {}, state)
         folder = run_dir(state["run_id"])
         folder.mkdir(parents=True, exist_ok=True)
-        if report_dict["ok"] and merged is not None:
-            (folder / "proposed.yaml").write_text(to_yaml(merged))
-            (folder / "validation.json").write_text(json.dumps(report_dict, indent=2, default=str))
-            done = tool_result(submit["id"], "VALID - rules are waiting for human approval.")
-            update |= {"messages": [{"role": "user", "content": [*others, done]}], "status": "awaiting_approval",
-                       "proposed_rules": merged.model_dump(mode="json"), "agent_rules": merged.model_dump(mode="json"),
-                       "duration_ms": _elapsed_ms(state)}  # fmt: skip
-            metrics.write_agent_run({**state, **update}, "awaiting_approval", rules_hash=rules_hash(merged))
-            return update
+        if report["ok"] and merged is not None:
+            return self._accept(state, submit, others, merged, report, folder)
+        return self._reject(state, submit, others, merged, report, folder)
+
+    @staticmethod
+    def _accept(state: State, submit: dict[str, Any], others: list[dict[str, Any]], merged: SilverRules,
+                report: dict[str, Any], folder: Path) -> dict[str, Any]:  # fmt: skip
+        """Valid: write the proposal for review and pause for approval."""
+        (folder / "proposed.yaml").write_text(to_yaml(merged))
+        (folder / "validation.json").write_text(json.dumps(report, indent=2, default=str))
+        done = tool_result(submit["id"], "VALID - rules are waiting for human approval.")
+        dumped = merged.model_dump(mode="json")
+        update = {"validation": report, "messages": [{"role": "user", "content": [*others, done]}],
+                  "status": "awaiting_approval", "proposed_rules": dumped, "agent_rules": dumped,
+                  "duration_ms": _elapsed_ms(state)}  # fmt: skip
+        metrics.write_agent_run({**state, **update}, "awaiting_approval", rules_hash=rules_hash(merged))
+        return update
+
+    @staticmethod
+    def _reject(state: State, submit: dict[str, Any], others: list[dict[str, Any]], merged: SilverRules | None,
+                report: dict[str, Any], folder: Path) -> dict[str, Any]:  # fmt: skip
+        """Invalid: send the errors back to the model, or end as failed after MAX_ATTEMPTS."""
         attempts = state.get("attempts", 0) + 1
-        feedback = _feedback(report_dict)
-        update |= {"attempts": attempts, "messages": [{"role": "user", "content": [*others, tool_result(
-            submit["id"], feedback, is_error=True)]}]}  # fmt: skip
+        feedback = tool_result(submit["id"], _feedback(report), is_error=True)
+        update: dict[str, Any] = {"validation": report, "attempts": attempts,
+                                  "messages": [{"role": "user", "content": [*others, feedback]}]}  # fmt: skip
         if attempts == 1:
-            update["first_validation_errors"] = report_dict["errors"]
+            update["first_validation_errors"] = report["errors"]
         if attempts >= MAX_ATTEMPTS:
             if merged is not None:
                 (folder / "proposed_failed.yaml").write_text(to_yaml(merged))
-            (folder / "validation.json").write_text(json.dumps(report_dict, indent=2, default=str))
+            (folder / "validation.json").write_text(json.dumps(report, indent=2, default=str))
             update |= {"status": "failed", "duration_ms": _elapsed_ms(state),
                        "proposed_rules": merged.model_dump(mode="json") if merged else None}  # fmt: skip
             metrics.write_agent_run({**state, **update}, "failed")
         return update
 
+    @staticmethod
     def route_validate(state: State) -> str:
+        """Valid -> map_leftovers; failed -> END; otherwise back to the agent with the feedback."""
         if state.get("status") == "awaiting_approval":
             return "map_leftovers"
         return END if state.get("status") == "failed" else "agent"
 
-    # --- map_leftovers --------------------------------------------------------------------
-    def map_leftovers(state: State) -> dict[str, Any]:
+    # --- leftovers, approval and save -------------------------------------------------------
+
+    def map_leftovers(self, state: State) -> dict[str, Any]:
         """The cheap model decides values left outside the standard lists; never blocks the review."""
         rules = SilverRules.model_validate(state["proposed_rules"])
         try:
-            done = mapping_assist.complete(state["run_id"], rules, client=client, mode=mode)
+            done = mapping_assist.complete(state["run_id"], rules, client=self.client, mode=self.mode)
         except LLMError as exc:
-            log.warning("leftover mapping skipped", run_id=state["run_id"], error=str(exc)[:200])
+            self.log.warning("leftover mapping skipped", run_id=state["run_id"], error=str(exc)[:200])
             return {}
-        report_dict = mapping_assist.write(run_dir(state["run_id"]), done, settings.cheap_model)
-        if report_dict is None:
+        report = mapping_assist.write(run_dir(state["run_id"]), done, settings.cheap_model)
+        if report is None:
             return {}
         completed = done["rules"]
         dumped = completed.model_dump(mode="json")
-        update = {"proposed_rules": dumped, "agent_rules": dumped, "validation": report_dict,
+        update = {"proposed_rules": dumped, "agent_rules": dumped, "validation": report,
                   "input_tokens": state.get("input_tokens", 0) + done["input_tokens"],
                   "output_tokens": state.get("output_tokens", 0) + done["output_tokens"],
                   "cost_usd": round(state.get("cost_usd", 0.0) + done["cost_usd"], 6)}  # fmt: skip
         metrics.write_agent_run({**state, **update}, "awaiting_approval", rules_hash=rules_hash(completed))
         return update
 
-    def give_up(state: State) -> dict[str, Any]:
-        update = {"status": "failed", "duration_ms": _elapsed_ms(state)}
-        metrics.write_agent_run({**state, **update}, "failed")
-        return update
-
-    # --- approve / save -------------------------------------------------------------------
+    @staticmethod
     def approve(state: State) -> dict[str, Any]:
+        """Pause for a person (LangGraph interrupt). Approve re-reads and re-validates the (edited) file."""
         path = run_dir(state["run_id"]) / "proposed.yaml"
         decision = interrupt({
             "reason": "awaiting_approval", "proposed": str(path),
@@ -290,32 +336,37 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
             return {"approval_errors": errors, "status": "awaiting_approval"}
         return {"proposed_rules": edited, "approval_errors": None, "status": "approved"}
 
+    @staticmethod
     def route_approve(state: State) -> str:
+        """Approved -> save; rejected -> END; edits that fail validation -> pause again."""
         return {"approved": "save", "rejected": END}.get(state.get("status", ""), "approve")
 
+    @staticmethod
     def save(state: State) -> dict[str, Any]:
+        """Write the approved rules file the silver build reads."""
         rules = SilverRules.model_validate(state["proposed_rules"])
         APPROVED_PATH.parent.mkdir(parents=True, exist_ok=True)
         APPROVED_PATH.write_text(to_yaml(rules))
         metrics.write_agent_run(state, "approved", rules_hash=rules_hash(rules))
         return {"status": "approved"}
 
-    graph = StateGraph(State)
-    for name, fn in [("prepare", prepare), ("agent", agent), ("tools", tools), ("force_submit", force_submit),
-                     ("validate", validate), ("map_leftovers", map_leftovers), ("give_up", give_up),
-                     ("approve", approve), ("save", save)]:  # fmt: skip
-        graph.add_node(name, fn)
-    graph.add_edge(START, "prepare")
-    graph.add_edge("prepare", "agent")
-    graph.add_conditional_edges("agent", route_agent, ["tools", "validate", "force_submit", "give_up"])
-    graph.add_edge("tools", "agent")
-    graph.add_edge("force_submit", "agent")
-    graph.add_conditional_edges("validate", route_validate, ["map_leftovers", "agent", END])
-    graph.add_edge("map_leftovers", "approve")
-    graph.add_edge("give_up", END)
-    graph.add_conditional_edges("approve", route_approve, ["save", "approve", END])
-    graph.add_edge("save", END)
-    return graph.compile(checkpointer=checkpointer)
+
+def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None = None) -> Any:
+    """Compile the DQ agent graph (see DQAgentGraph)."""
+    return DQAgentGraph(client=client, mode=mode).compile(checkpointer)
+
+
+def _check_submission(submitted: dict[str, Any], state: State) -> tuple[SilverRules | None, dict[str, Any]]:
+    """Schema-check the submission, merge it over the default rules, validate. Returns (merged, report)."""
+    # The pipeline owns the run id (the card shows only a short form); never trust the model's copy.
+    rules, schema_errors = check_schema({**submitted, "source_run_id": state["run_id"]})
+    if rules is None:
+        return None, {"ok": False, "layer": "schema", "errors": schema_errors, "warnings": [], "stats": {}}
+    defaults = SilverRules.model_validate(state["default_rules"])
+    merged = merge_rules(defaults, rules.model_copy(update={"generated_by": "agent"}))
+    report = validate_rules(merged, state["run_id"])
+    return merged, {"ok": report.ok, "layer": report.layer, "errors": report.errors, "warnings": report.warnings,
+                    "stats": report.stats}  # fmt: skip
 
 
 def _feedback(report: dict[str, Any]) -> str:
@@ -356,6 +407,7 @@ def _load_edited(path: Path, state: State) -> tuple[dict[str, Any] | None, list[
 
 
 def initial_state(run_id: str, thread_id: str) -> State:
+    """A fresh thread's state: zero counters, status running."""
     return State(run_id=run_id, thread_id=thread_id, messages=[], attempts=0, tool_calls=0, tool_calls_by_name={},
                  turns=0, input_tokens=0, output_tokens=0, cached_tokens=0, cost_usd=0.0, forced=False,
                  status="running", started_at=datetime.now(UTC).isoformat())  # fmt: skip
