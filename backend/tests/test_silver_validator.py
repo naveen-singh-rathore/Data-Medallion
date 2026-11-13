@@ -46,7 +46,7 @@ def test_semantic_layer(silver_run) -> None:
     report = validate_rules(raw, silver_run)
     assert report.layer == "semantic"
     text = "\n".join(report.errors)
-    for expected in ("(id).source: 'nope' is not a column", "unknown format id(s) ['DD.MM.YYYY']",
+    for expected in ("(id).source: 'nope' is not a column", "unknown format id(s): 'DD.MM.YYYY' -> ", "Valid ids: YYYY-MM-DD,",
                      "(closed).day_month_order: required", "(amount).steps: ['lower'] only apply to text",
                      "unknown issue id 'FAKE:flag'"):  # fmt: skip
         assert expected in text
@@ -84,7 +84,7 @@ def test_warnings_fire_at_thresholds(silver_run) -> None:
     report = validate_rules(raw, silver_run)
     text = "\n".join(report.warnings)
     assert report.ok
-    assert "state_as_int: 100.0% of sampled values are invalid" in text
+    assert "state_as_int: 100.0% of non-empty sampled values can't be read as the rule's type" in text
     assert "flag_dropped: rules null 100% of previously non-null values" in text
     assert "rows: 100.0% of sampled rows have errors" in text
     assert "state_as_int: confidence 0.4 < 0.6 without a needs_human question" in text
@@ -108,3 +108,26 @@ def test_default_rules_cover_only_issue_free_columns(silver_run) -> None:
     assert merged.generated_by == "agent"
     assert {c.source for c in merged.columns} == {c.source for c in defaults.columns} | {c.source for c in agent.columns}
     assert next(c for c in merged.columns if c.source == "amount").sentinels == ["999"]  # agent rule wins
+
+
+def test_unknown_format_ids_name_the_closest_valid_id() -> None:
+    from pipeline.silver.validator import unknown_format_message
+
+    message = unknown_format_message(["epoch_s", "unix"])
+    assert "'epoch_s' -> 'epoch seconds'" in message and "epoch milliseconds" in message
+
+
+def test_two_percent_unparseable_always_warns_even_when_diluted_by_empty_values() -> None:
+    """raw_tickets: created_at had 4.5% invalid over ALL sampled rows (< the 5% invalid threshold), and
+    resolved_at 1.9% over all rows but 3.8% of its non-empty values (half the column is empty)."""
+    from pipeline.silver.rules_schema import SilverRules
+    from pipeline.silver.validator import _stat_warnings
+
+    rules = SilverRules.model_validate({"source_run_id": "0" * 8 + "-0000-0000-0000-" + "0" * 12, "generated_by": "agent",
+                                        "columns": [{"name": "created_at", "source": "created_at", "type": "text",
+                                                     "confidence": 0.9, "why": "x" * 20}]})  # fmt: skip
+    base = {"null_before": 0.5, "null_after": 0.52, "newly_null_share": 0.04, "sentinel_hits": 0, "mapped": 0, "unmapped": 0}
+    warned = _stat_warnings(rules, {"columns": {"created_at": base | {"invalid": 0.019, "unparseable_share": 0.038}}})
+    assert any("created_at: 3.8% of non-empty sampled values can't be read" in w for w in warned)
+    quiet = _stat_warnings(rules, {"columns": {"created_at": base | {"invalid": 0.009, "unparseable_share": 0.019}}})
+    assert not any("can't be read" in w for w in quiet)

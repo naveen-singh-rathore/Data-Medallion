@@ -281,6 +281,8 @@ def date_profile(values: list[str], parsed: list[ParsedDate | None], reference_t
         "formats": [{"format": f, "share": _share(len(vs), total), "example": _first(vs, 1)[0]}
                     for f, vs in sorted(by_format.items(), key=lambda kv: (-len(kv[1]), kv[0]))],
         "format_count": len(by_format),  # survives trimming of the formats list
+        # every format id seen, most frequent first: the exact ids rules must use (never trimmed)
+        "format_ids": [f for f, _ in sorted(by_format.items(), key=lambda kv: (-len(kv[1]), kv[0]))],
         "unparsed": len(unmatched),
         "unparsed_examples": _first(unmatched, CFG.examples),
         "invalid_dates": len(findings["invalid"]),

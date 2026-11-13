@@ -10,6 +10,7 @@ Errors block the rules; warnings go to the human reviewer. `feedback()` is the c
 (<= 2 KB) text sent back to the agent.
 """
 
+import difflib
 import re
 import uuid
 from collections import Counter
@@ -22,7 +23,7 @@ from pydantic import ValidationError
 
 from pipeline.bronze import normalize_header
 from pipeline.db import get_ro_conn, transaction
-from pipeline.profile_dates import format_by_id, is_ambiguous_shape
+from pipeline.profile_dates import format_by_id, format_ids, is_ambiguous_shape
 from pipeline.profile_values import normalization_key
 from pipeline.silver.compiler import OUTPUT_COLUMNS, compile_rules
 from pipeline.silver.rules_schema import NUMBER_STEPS, TEXT_STEPS, SilverRules
@@ -32,6 +33,7 @@ DRY_RUN_TIMEOUT = "10s"
 FEEDBACK_BYTES = 2048
 LINE_CHARS = 900  # long enough for a full list of issue ids
 WARN_INVALID = 0.05
+WARN_UNPARSEABLE = 0.02  # of non-empty values: typed columns that can't read 2% of their values always warn
 WARN_ROWS_WITH_ERRORS = 0.10
 WARN_NEWLY_NULL = 0.30
 WARN_CONFIDENCE = 0.6
@@ -138,7 +140,7 @@ def _column_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
             formats = [format_by_id(f) for f in c.parse_formats]
             unknown = [f for f, fmt in zip(c.parse_formats, formats, strict=True) if fmt is None]
             if unknown:
-                errors.append(f"{where}.parse_formats: unknown format id(s) {unknown}; use ids from the profile")
+                errors.append(f"{where}.parse_formats: {unknown_format_message(unknown)}")
             if any(f and is_ambiguous_shape(f) for f in formats) and not c.day_month_order:
                 errors.append(f"{where}.day_month_order: required (dmy|mdy) for day/month-ambiguous formats")
         elif c.parse_formats or c.day_month_order:
@@ -224,6 +226,16 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def unknown_format_message(unknown: list[str]) -> str:
+    """Name the valid registry ids (the profile may show only the top formats) and the closest match."""
+    ids = format_ids()
+    hints = []
+    for u in unknown:
+        close = difflib.get_close_matches(u.replace("_", " "), ids, n=1, cutoff=0.4)
+        hints.append(f"{u!r} -> {close[0]!r}" if close else f"{u!r} -> ?")
+    return f"unknown format id(s): {', '.join(hints)}. Valid ids: {', '.join(ids)}"
+
+
 def _stats(rules: SilverRules, rows: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(rows) or 1
     columns = {}
@@ -238,6 +250,7 @@ def _stats(rules: SilverRules, rows: list[dict[str, Any]]) -> dict[str, Any]:
             "newly_null_share": newly_null / max(n - before, 1),
             "sentinel_hits": sum(v for k, v in flags.items() if k.startswith("sentinel:")),
             "mapped": flags["mapped"], "unmapped": flags["unmapped"],
+            "unparseable": flags["unparseable"], "unparseable_share": flags["unparseable"] / max(n - before, 1),
         }  # fmt: skip
     rows_stats = {
         "sampled": len(rows),
@@ -251,7 +264,10 @@ def _stats(rules: SilverRules, rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _stat_warnings(rules: SilverRules, stats: dict[str, Any]) -> list[str]:
     warnings = []
     for name, s in stats.get("columns", {}).items():
-        if s["invalid"] > WARN_INVALID:
+        if s.get("unparseable_share", 0) >= WARN_UNPARSEABLE:
+            warnings.append(f"{name}: {s['unparseable_share']:.1%} of non-empty sampled values can't be read as the "
+                            f"rule's type (>= {WARN_UNPARSEABLE:.0%}); they become empty. Check parse_formats/steps")  # fmt: skip
+        elif s["invalid"] > WARN_INVALID:
             warnings.append(f"{name}: {s['invalid']:.1%} of sampled values are invalid (> {WARN_INVALID:.0%})")
         if s["newly_null_share"] > WARN_NEWLY_NULL:
             warnings.append(f"{name}: rules null {s['newly_null_share']:.0%} of previously non-null values (> {WARN_NEWLY_NULL:.0%})")
