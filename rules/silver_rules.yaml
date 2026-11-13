@@ -186,6 +186,8 @@ columns:
     critical:
     - critical
     - crit
+    - urgent!!!
+    - asap
     high:
     - high
     - hi
@@ -195,6 +197,7 @@ columns:
     medium:
     - medium
     - med
+    - normal
   confidence: 0.8
   why: Priority is split by casing (critical×564 vs CRITICAL×558), halving counts per level in SLA and escalation
     reporting; 10 '???/null' tokens become NULL.
@@ -334,6 +337,32 @@ row_checks:
     tickets.
   addresses:
   - ORDER:created_at>resolved_at
+- kind: swapped_columns
+  params:
+    a: category
+    b: description
+  action: swap
+  why: Some tickets have the description typed into category and the category label into description; swapping them
+    back recovers a real category instead of a sentence.
+- kind: junk_row
+  params:
+    id: ticket_id
+    id_pattern: ^[A-Za-z]+-[0-9]{4,5}$
+    min_empty_share: '0.6'
+  action: reject
+  why: Rows that are mostly empty or placeholders, or whose ticket id is not a ticket id (99.96% follow letters-dash-4/5
+    digits), are not real tickets and would inflate volume.
+  addresses:
+  - PARTIAL_ROWS:dataset
+- kind: declared_duplicate
+  params:
+    id: ticket_id
+    pattern: '(?i)duplicate of ticket #?([0-9]+)'
+    prefix: TKT-
+    source: resolution_notes
+  action: duplicate
+  why: '823 tickets are closed as ''Duplicate of ticket #N''; counting them as new work double-counts volume, backlog
+    and cost.'
 addressed_issues:
 - issue_id: ORDER:created_at>resolved_at
   resolution: rule
@@ -345,10 +374,6 @@ addressed_issues:
   resolution: rule
 - issue_id: SENTINEL:sla_hours
   resolution: rule
-- issue_id: PARTIAL_ROWS:dataset
-  resolution: ignored
-  reason: Only 28 rows (0.27%) with ≥7 empty cells; they are kept with NULLs since any present fields (category,
-    building, created_at) still count toward volume. Those missing ticket_id are rejected by the ticket_id rule.
 - issue_id: NULLTOK:ticket_id
   resolution: rule
 - issue_id: AMBIG:created_at
@@ -396,6 +421,8 @@ addressed_issues:
 - issue_id: EMPTY:sla_hours
   resolution: rule
 - issue_id: NULLTOK:sla_hours
+  resolution: rule
+- issue_id: PARTIAL_ROWS:dataset
   resolution: rule
 needs_human:
 - issue_ids:

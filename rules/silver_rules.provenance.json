@@ -2,7 +2,7 @@
   "file": "data/raw_tickets.csv",
   "file_sha256": "2bf36d21997826bc25cf894507a311438ead899e0cb89a6680b2eb62305967d0",
   "approved_run_id": "85113639-1dc6-469c-990c-a29da5334456",
-  "rules_hash": "41e7fe99e8d9f3b6",
+  "rules_hash": "63ff2060dc06af6c",
   "generated_by": "human",
   "context": {
     "source": "inferred",
@@ -68,7 +68,8 @@
       "decision": "approved"
     },
     "column:priority": {
-      "decision": "approved"
+      "decision": "approved",
+      "note": "approved by Claude on the user's instruction (leftovers: normal→medium, urgent!!!/asap→critical)"
     },
     "column:resolution_notes": {
       "decision": "approved"
@@ -90,6 +91,15 @@
       "decision": "approved"
     },
     "row_check:date_order:{\"a\": \"created_at\", \"b\": \"resolved_at\"}": {
+      "decision": "approved"
+    },
+    "row_check:declared_duplicate:{\"id\": \"ticket_id\", \"pattern\": \"(?i)duplicate of ticket #?([0-9]+)\", \"prefix\": \"TKT-\", \"source\": \"resolution_notes\"}": {
+      "decision": "approved"
+    },
+    "row_check:junk_row:{\"id\": \"ticket_id\", \"id_pattern\": \"^[A-Za-z]+-[0-9]{4,5}$\", \"min_empty_share\": \"0.6\"}": {
+      "decision": "approved"
+    },
+    "row_check:swapped_columns:{\"a\": \"category\", \"b\": \"description\"}": {
       "decision": "approved"
     }
   }
