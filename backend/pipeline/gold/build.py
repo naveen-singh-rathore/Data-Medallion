@@ -94,6 +94,40 @@ def _category_exprs(conn: Any, silver_table: tuple[str, str], rules: SilverRules
 # --- findings: the business case next to the metrics it affects -------------------------------------
 
 
+def _standard_only(rules: SilverRules, col: str) -> sql.Composable:
+    """A role column with a standard-value list: values outside the list become NULL ((unknown) in marts)."""
+    rule = next((r for r in rules.columns if r.name == col), None)
+    if rule and rule.mapping:
+        return sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN s.{c} END").format(c=sql.Identifier(col), k=_text_array(list(rule.mapping)))
+    return sql.SQL("s.{c}").format(c=sql.Identifier(col))
+
+
+def _duplicate_finding(conn: Any, silver: sql.Identifier, id_col: str) -> dict[str, Any] | None:
+    """Tickets whose own notes say they duplicate another (silver status duplicate, _duplicate_of set)."""
+    q = conn.cursor(row_factory=dict_row)
+    has = q.execute("SELECT 1 FROM information_schema.columns WHERE table_schema || '.' || table_name = %s"
+                    " AND column_name = '_duplicate_of'", (silver.as_string(conn).replace('"', ""),)).fetchone()  # fmt: skip
+    if not has:  # silver built before declared duplicates existed: nothing to report
+        return None
+    ids = sql.Identifier(id_col)
+    r = q.execute(sql.SQL(
+        "SELECT count(*) AS total, count(*) FILTER (WHERE {dup}) AS declared,"
+        " count(*) FILTER (WHERE {dup} AND _duplicate_of IN (SELECT {i} FROM {t})) AS target_found,"
+        " (SELECT count(*) FROM (SELECT {i} FROM {t} WHERE {i} IS NOT NULL GROUP BY 1 HAVING count(*) > 1) x) AS repeated_ids"
+        " FROM {t}").format(dup=sql.SQL("_duplicate_of IS NOT NULL"), i=ids, t=silver)).fetchone()  # fmt: skip
+    if not r["declared"]:
+        return None
+    return {"finding": "self_declared_duplicates", "title": "Tickets that say they duplicate another ticket",
+            "severity": "medium" if r["declared"] / r["total"] > 0.02 else "low", "rows_affected": r["declared"],
+            "denominator": r["total"], "share_pct": round(100 * r["declared"] / r["total"], 1),
+            "metric_affected": "ticket volume, backlog, cost (they are not counted as tickets)",
+            "impact": (f"{r['declared']:,} tickets are closed as duplicates in their own notes; {r['target_found']:,} of them point "
+                       f"at a ticket that exists in this file. They are kept in silver with status duplicate and left out of "
+                       f"every gold count. The id column itself never repeats ({r['repeated_ids']} repeated ids)."),
+            "recommendation": "Link duplicates in the source system instead of a note, so they never count as new work.",
+            "evidence": {"declared": r["declared"], "target_found": r["target_found"], "repeated_ids": r["repeated_ids"]}}  # fmt: skip
+
+
 def _findings(conn: Any, schema: sql.Identifier) -> list[dict[str, Any]]:
     q = conn.cursor(row_factory=dict_row)
     fact = sql.SQL("{}.fact_tickets").format(schema)
@@ -233,6 +267,7 @@ def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Pat
                 "silver_build_id": sql.Literal(str(silver["build_id"])),  # type: ignore[index]
                 "resolved_statuses": _text_array(model.get("resolved_statuses") or []),
                 "category_final": final, "category_source": source, "escalation_select": escalation,
+                "priority_value": _standard_only(rules, roles["priority"]), "location_value": _standard_only(rules, roles["location"]),
             }  # fmt: skip
             conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(staging))
             for t in TABLES:
@@ -243,7 +278,10 @@ def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Pat
                 conn.execute(sql.SQL("COMMENT ON COLUMN {}.resolution_sla.escalation_rate_pct IS {}").format(staging, sql.Literal(
                     f"100 * tickets whose CURRENT status is one of {escalated} / tickets. A snapshot: tickets escalated "
                     "earlier and since resolved are not counted (no status history in the source).")))  # fmt: skip
-            _store_findings(conn, staging, _findings(conn, staging))
+            findings = _findings(conn, staging)
+            if dup := _duplicate_finding(conn, sql.Identifier(s_schema, s_table), roles["id"]):
+                findings.append(dup)
+            _store_findings(conn, staging, findings)
             silver_rows = conn.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(s_schema, f"{s_table}_valid"))).fetchone()[0]  # type: ignore[index]
             checks = _checks(conn, staging, silver_rows)
             if not all(c["ok"] for c in checks.values()):

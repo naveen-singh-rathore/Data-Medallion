@@ -22,10 +22,17 @@ from pipeline.config import REPO_ROOT
 from pipeline.profile_config import PROFILE_CONFIG as CFG
 from pipeline.profile_dates import format_by_id, pg_pattern
 from pipeline.profile_values import normalization_key
-from pipeline.silver.rules_schema import ColumnRule, RowCheck, SilverRules, rules_hash
+from pipeline.silver.rules_schema import (
+    ROW_CHECK_COLUMNS,
+    ColumnRule,
+    RowCheck,
+    SilverRules,
+    rules_hash,
+)
 
 COMPILED_DIR = REPO_ROOT / "build" / "compiled"
-OUTPUT_COLUMNS = frozenset({"bronze_id", "row_hash", "_quality_flags", "_errors", "_rejected", "_dup_rank"})
+OUTPUT_COLUMNS = frozenset({"bronze_id", "row_hash", "_quality_flags", "_errors", "_rejected", "_dup_rank", "_duplicate_of"})
+LONG_TEXT_CHARS, LONG_TEXT_WORDS = 40, 4  # longer than this in a label column = text that leaked in (swapped_columns)
 FLAG_CHUNK = 40  # jsonb_build_object takes at most 100 arguments
 
 _CURRENCY = f"[{CFG.currency_symbols}]|\\m({'|'.join(CFG.currency_codes)})\\M"
@@ -75,8 +82,8 @@ def has_raw_column(rule: ColumnRule) -> bool:
 # --- per-column expressions ----------------------------------------------------------
 
 
-def clean_expr(rule: ColumnRule) -> sql.Composable:
-    expr: sql.Composable = sql.SQL("(payload ->> {})").format(sql.Literal(rule.source))
+def clean_expr(rule: ColumnRule, raw: sql.Composable | None = None) -> sql.Composable:
+    expr: sql.Composable = raw if raw is not None else sql.SQL("(payload ->> {})").format(sql.Literal(rule.source))
     for step in rule.steps:
         prefix, suffix = STEP_SQL[step]
         expr = sql.Composed([sql.SQL(prefix), expr, sql.SQL(suffix)])
@@ -165,8 +172,47 @@ def range_expr(rule: ColumnRule, typed: sql.Composable) -> sql.Composable:
 # --- row checks ----------------------------------------------------------------------
 
 
-def row_check_failure(check: RowCheck) -> sql.Composable:
+def _raw(source: str) -> sql.Composable:
+    return sql.SQL("(payload ->> {})").format(sql.Literal(source))
+
+
+def swap_condition(a: ColumnRule, b: ColumnRule) -> sql.Composable:
+    """a (a label column) holds long text AND b (a text column) holds one of a's known values."""
+    ra, rb = _raw(a.source), _raw(b.source)
+    long_text = sql.SQL("(length(btrim({ra})) > {c} OR coalesce(array_length(regexp_split_to_array(btrim({ra}), '[[:space:]]+'), 1), 0) > {w})").format(
+        ra=ra, c=sql.Literal(LONG_TEXT_CHARS), w=sql.Literal(LONG_TEXT_WORDS))  # fmt: skip
+    return sql.SQL("coalesce({} AND silver.norm_key(btrim({})) = ANY({}), false)").format(
+        long_text, rb, _text_array(sorted(mapping_keys(a))))
+
+
+def junk_failure(check: RowCheck, rules: SilverRules) -> sql.Composable:
+    """>= min_empty_share of the row's cells empty or placeholders, or the id fails the dominant pattern."""
     p = check.params
+    tokens = sorted({t.lower() for t in CFG.null_like_tokens} | {t.lower() for c in rules.columns for t in c.null_tokens})
+    cells = [sql.SQL("CASE WHEN silver.blank_to_null(btrim({r})) IS NULL OR lower(btrim({r})) = ANY({t})"
+                     " OR btrim({r}) ~ '^[[:punct:]]+$' THEN 1 ELSE 0 END").format(r=_raw(c.source), t=_text_array(tokens))
+             for c in rules.columns]  # fmt: skip
+    share = sql.SQL("(({})::numeric / {} >= {})").format(sql.SQL(" + ").join(cells), sql.Literal(len(cells)),
+                                                          sql.Literal(float(str(p["min_empty_share"]))))  # fmt: skip
+    bad_id = sql.SQL("({id} IS NOT NULL AND NOT {id} ~ {pat})").format(id=sql.Identifier(str(p["id"])), pat=sql.Literal(str(p["id_pattern"])))
+    return sql.SQL("coalesce({} OR {}, false)").format(share, bad_id)
+
+
+def duplicate_of_expr(check: RowCheck) -> sql.Composable:
+    p = check.params
+    return sql.SQL("({} || substring({} FROM {}))").format(sql.Literal(str(p["prefix"])), sql.Identifier(str(p["source"])),
+                                                         sql.Literal(str(p["pattern"])))  # fmt: skip
+
+
+def row_check_failure(check: RowCheck, rules: SilverRules | None = None) -> sql.Composable:
+    p = check.params
+    if check.kind == "swapped_columns":
+        by_name = {c.name: c for c in rules.columns}  # type: ignore[union-attr]
+        return swap_condition(by_name[str(p["a"])], by_name[str(p["b"])])
+    if check.kind == "junk_row":
+        return junk_failure(check, rules)  # type: ignore[arg-type]
+    if check.kind == "declared_duplicate":
+        return sql.SQL("({} IS NOT NULL)").format(duplicate_of_expr(check))
     if check.kind == "date_order":
         return sql.SQL("coalesce({} > {}, false)").format(sql.Identifier(p["a"]), sql.Identifier(p["b"]))
     if check.kind == "not_both_null":
@@ -178,8 +224,7 @@ def row_check_failure(check: RowCheck) -> sql.Composable:
 
 
 def _check_label(check: RowCheck) -> str:
-    p = check.params
-    names = [p["a"], p["b"]] if check.kind != "required_if" else [p["column"], p["other"]]
+    names = [check.params[k] for k in ROW_CHECK_COLUMNS[check.kind]]
     return f"row:{check.kind}:{','.join(str(n) for n in names)}"
 
 
@@ -199,7 +244,18 @@ def _source_filter(sample: int | None) -> sql.Composable:
 def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) -> CompiledSQL:
     """Pure: rules -> SELECT over the run's ok bronze rows (optionally a fixed hash sample)."""
     cols = rules.columns
-    s1 = [sql.SQL("{} AS {}").format(clean_expr(c), _id(c.name, "__c")) for c in cols]
+    by_name = {c.name: c for c in cols}
+    raw_of: dict[str, sql.Composable] = {}  # swapped_columns: exchange raw values before any cleaning
+    swapped_in: dict[str, list[tuple[int, str]]] = {}
+    for i, ch in enumerate(rules.row_checks):
+        if ch.kind == "swapped_columns":
+            a, b = by_name[str(ch.params["a"])], by_name[str(ch.params["b"])]
+            cond = swap_condition(a, b)
+            raw_of[a.name] = sql.SQL("CASE WHEN {} THEN {} ELSE {} END").format(cond, _raw(b.source), _raw(a.source))
+            raw_of[b.name] = sql.SQL("CASE WHEN {} THEN {} ELSE {} END").format(cond, _raw(a.source), _raw(b.source))
+            for col in (a.name, b.name):
+                swapped_in.setdefault(col, []).append((i, f"swapped:{a.name},{b.name}"))
+    s1 = [sql.SQL("{} AS {}").format(clean_expr(c, raw_of.get(c.name)), _id(c.name, "__c")) for c in cols]
     s2 = []
     for c in cols:
         clean = _id(c.name, "__c")
@@ -229,7 +285,8 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
     for i, check in enumerate(checks):
         if check.action == "null_second":
             nulled_by_check[check.params["b"]].append(i)
-    s6 = [sql.SQL("{} AS {}").format(row_check_failure(ch), _id(f"_chk{i}")) for i, ch in enumerate(checks)]
+    s6 = [sql.SQL("{} AS {}").format(row_check_failure(ch, rules), _id(f"_chk{i}")) for i, ch in enumerate(checks)]
+    declared = [(i, ch) for i, ch in enumerate(checks) if ch.kind == "declared_duplicate"]
 
     final_values = []
     for c in cols:
@@ -239,7 +296,7 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
             final_values.append(sql.SQL("CASE WHEN {} THEN NULL ELSE {} END AS {}").format(cond, _id(c.name), _id(c.name)))
         else:
             final_values.append(_id(c.name))
-    raw_cols = [c for c in cols if has_raw_column(c)]
+    raw_cols = [c for c in cols if has_raw_column(c) or c.name in swapped_in]
     raw_select = [sql.SQL("(payload ->> {}) AS {}").format(sql.Literal(c.source), _id(c.name, "_raw")) for c in raw_cols]
 
     def column_flags(c: ColumnRule) -> sql.Composable:
@@ -255,6 +312,9 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
             sql.SQL("CASE WHEN {} THEN 'unparseable' END").format(_id(c.name, "__bad")),
             sql.SQL("CASE WHEN {} THEN 'out_of_range' END").format(_id(c.name, "__oor")),
             *[sql.SQL("CASE WHEN {} THEN 'nulled_by_row_check' END").format(_id(n)) for n in nulled],
+            *[sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), sql.Literal(label)) for i, label in swapped_in.get(c.name, [])],
+            *[sql.SQL("CASE WHEN {} THEN 'declared_duplicate' END").format(_id(f"_chk{i}"))
+              for i, ch in declared if ch.params["source"] == c.name],
         ]  # fmt: skip
         return sql.SQL("silver.flags({})").format(sql.SQL(", ").join(items))
 
@@ -282,7 +342,10 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
 
     errors = [e for c in cols for e in column_errors(c)]
     errors += [(sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), sql.Literal(_check_label(ch))), ch.action == "reject")
-               for i, ch in enumerate(checks)]  # fmt: skip
+               for i, ch in enumerate(checks) if ch.action not in ("swap", "duplicate")]  # fmt: skip  (fixes, not errors)
+    duplicate_of = (sql.SQL("coalesce({})").format(sql.SQL(", ").join(
+        sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), duplicate_of_expr(ch)) for i, ch in declared)) if declared
+        else sql.SQL("NULL::text"))  # fmt: skip
     error_array = sql.SQL("array_remove(ARRAY[{}]::text[], NULL)").format(
         sql.SQL(", ").join(e for e, _ in errors)) if errors else sql.SQL("ARRAY[]::text[]")  # fmt: skip
     rejecting = [e for e, rejects in errors if rejects]
@@ -307,7 +370,7 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
     final = sql.SQL(", ").join([
         sql.SQL("bronze_id"), sql.SQL("row_hash"), *final_values, *raw_select,
         sql.SQL("jsonb_strip_nulls({}) AS _quality_flags").format(flags), sql.SQL("{} AS _errors").format(error_array),
-        sql.SQL("{} AS _rejected").format(rejected),
+        sql.SQL("{} AS _rejected").format(rejected), sql.SQL("{} AS _duplicate_of").format(duplicate_of),
     ])  # fmt: skip
     ranked = sql.SQL("SELECT {} FROM ({}) AS s7").format(final, inner)
     query = sql.SQL("SELECT *, {} AS _dup_rank FROM ({}) AS s8").format(dup_rank, ranked)

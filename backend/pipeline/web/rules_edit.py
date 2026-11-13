@@ -166,11 +166,10 @@ def reopen(run_id: uuid.UUID) -> dict[str, Any]:
     """Take back an approval so the rules can be changed and approved again.
 
     The agent thread is put back at its approval pause (as if the leftover mapping had just run,
-    so no AI call is made), the approved rules become the proposal again, and the previously approved
-    file is kept next to it as approved_before_reopen.yaml.
+    so no AI call is made) and the approved rules become the proposal again. The approved file is
+    left in place (silver and gold stay valid) until the revised rules are approved.
     """
     from pipeline.db import transaction
-    from pipeline.dq_agent import graph as dq_graph
     from pipeline.dq_agent import runner
 
     thread_id = runner.latest_thread(str(run_id))
@@ -187,12 +186,7 @@ def reopen(run_id: uuid.UUID) -> dict[str, Any]:
         if runner.snapshot(graph, thread_id)["status"] != "awaiting_approval":
             raise RuntimeError("the review could not be put back at its approval step")
     path = proposed_path(str(run_id))
-    approved_file = dq_graph.APPROVED_PATH
-    if approved_file.exists():
-        current = SilverRules.model_validate(from_yaml(approved_file.read_text()))
-        if current.source_run_id == str(run_id):
-            (path.parent / "approved_before_reopen.yaml").write_text(approved_file.read_text())
-            approved_file.unlink()
+    # The approved file stays: silver and gold remain built from it until the revised rules are approved.
     if approved_rules:
         path.write_text(to_yaml(SilverRules.model_validate(approved_rules)))
     with transaction() as conn:

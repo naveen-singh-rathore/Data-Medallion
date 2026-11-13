@@ -113,8 +113,20 @@ def agent_snapshot(run_id: uuid.UUID) -> dict[str, Any] | None:
     return snap
 
 
+def _in_review(run_id: uuid.UUID) -> bool:
+    row = _one("SELECT status FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,))
+    return bool(row and row["status"] == "awaiting_approval" and proposed_path(str(run_id)).exists())
+
+
 def current_rules(run_id: uuid.UUID) -> tuple[SilverRules | None, str | None, Path | None]:
-    """(rules, 'approved' | 'proposed', path) for this run."""
+    """(rules, 'approved' | 'proposed', path) for this run. While a review is open the proposal is shown,
+    even when an earlier version is approved (and still builds silver)."""
+    if _in_review(run_id):
+        path = proposed_path(str(run_id))
+        try:
+            return SilverRules.model_validate(from_yaml(path.read_text())), "proposed", path
+        except (ValueError, TypeError):
+            return None, "proposed", path
     if APPROVED_PATH.exists():
         try:
             approved = SilverRules.model_validate(from_yaml(APPROVED_PATH.read_text()))
@@ -198,6 +210,8 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
     status = (agent or {}).get("status")
     if running_step in ("agent", "resume"):
         agent_state, agent_summary = "running", "the AI is investigating the data"
+    elif not agent and rules_state == "approved":
+        agent_state, agent_summary = "done", "not run here: the approved rules come from the repository"
     elif not agent:
         agent_state, agent_summary = ("error", job["error"]) if failed_step == "agent" and job else ("waiting", "not started")
     elif status == "failed":
@@ -592,7 +606,7 @@ def _cell(rule: Any, row: dict[str, Any]) -> dict[str, Any]:
 def _row_status(row: dict[str, Any]) -> str:
     if row["_rejected"]:
         return "rejected"
-    if row["_dup_rank"] > 1:
+    if row["_dup_rank"] > 1 or row.get("_duplicate_of"):
         return "duplicate"
     return "flagged" if row["_errors"] else "kept"
 
@@ -604,6 +618,8 @@ def silver_summary(run_id: uuid.UUID) -> dict[str, Any] | None:
     rows, rules = preview.rows, preview.rules
     status = Counter(_row_status(r) for r in rows)
     errors = Counter(e for r in rows for e in r["_errors"])
+    swapped = sum(any(f.startswith("swapped:") for fl in (r["_quality_flags"] or {}).values() for f in fl) for r in rows)
+    declared = sum(bool(r.get("_duplicate_of")) for r in rows)
     types = {c.name: c.type for c in rules.columns}
     columns = []
     for c in rules.columns:
@@ -634,6 +650,7 @@ def silver_summary(run_id: uuid.UUID) -> dict[str, Any] | None:
         "errors": [{"error": k, "label": explain.error_label(k, types), "count": v} for k, v in errors.most_common()],
         "columns": columns,
         "target_table": rules.target_table, "flag_help": explain.FLAGS,
+        "row_fixes": {"swapped_columns": swapped, "declared_duplicate": declared},
     })  # fmt: skip
 
 

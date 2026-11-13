@@ -6,6 +6,7 @@ Strict Pydantic v2 models with extra='forbid', so unknown fields and typos are e
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -73,15 +74,25 @@ class DedupRule(_Strict):
         return self
 
 
-ROW_CHECK_PARAMS = {"date_order": {"a", "b"}, "required_if": {"column", "other", "values"}, "not_both_null": {"a", "b"}}
+ROW_CHECK_PARAMS = {"date_order": {"a", "b"}, "required_if": {"column", "other", "values"}, "not_both_null": {"a", "b"},
+                    "swapped_columns": {"a", "b"}, "junk_row": {"id", "id_pattern", "min_empty_share"},
+                    "declared_duplicate": {"source", "pattern", "id", "prefix"}}  # fmt: skip
+# which params name target columns (the rest are values)
+ROW_CHECK_COLUMNS = {"date_order": ("a", "b"), "required_if": ("column", "other"), "not_both_null": ("a", "b"),
+                     "swapped_columns": ("a", "b"), "junk_row": ("id",), "declared_duplicate": ("source", "id")}  # fmt: skip
+ONLY_ACTION = {"swapped_columns": "swap", "declared_duplicate": "duplicate"}
 
 
 class RowCheck(_Strict):
-    kind: Literal["date_order", "required_if", "not_both_null"]
+    kind: Literal["date_order", "required_if", "not_both_null", "swapped_columns", "junk_row", "declared_duplicate"]
     params: dict[str, str | list[str]] = Field(
-        description="date_order/not_both_null: {a, b}; required_if: {column, other, values: [...]}"
+        description="date_order/not_both_null: {a, b}; required_if: {column, other, values: [...]}; "
+        "swapped_columns: {a: column with a standard list, b: free-text column} - exchange their raw values when a "
+        "holds long text and b holds one of a's known values; junk_row: {id, id_pattern (regex), min_empty_share "
+        "(e.g. '0.6')}; declared_duplicate: {source: text column, pattern: regex with ONE group capturing the "
+        "referenced id, id: id column, prefix: text put before the captured value}"
     )
-    action: Literal["reject", "null_second", "flag"]
+    action: Literal["reject", "null_second", "flag", "swap", "duplicate"]
     why: str = Field(min_length=20)
     addresses: list[str] = Field(default_factory=list)
 
@@ -92,8 +103,26 @@ class RowCheck(_Strict):
             raise ValueError(f"params for {self.kind} must be exactly {sorted(expected)}")
         if self.kind == "required_if" and not isinstance(self.params["values"], list):
             raise ValueError("required_if params.values must be a list")
-        if self.action == "null_second" and self.kind == "required_if":
-            raise ValueError("null_second applies to two-column checks only")
+        if self.action == "null_second" and self.kind not in ("date_order", "not_both_null"):
+            raise ValueError("null_second applies to date_order / not_both_null only")
+        only = ONLY_ACTION.get(self.kind)
+        if (only and self.action != only) or (not only and self.action in ONLY_ACTION.values()):
+            raise ValueError(f"action {self.action!r} does not fit {self.kind}" + (f" (use {only!r})" if only else ""))
+        if self.kind == "junk_row":
+            try:
+                share = float(str(self.params["min_empty_share"]))
+            except ValueError:
+                share = -1
+            if not 0 < share <= 1:
+                raise ValueError("junk_row params.min_empty_share must be a number in (0, 1]")
+        if self.kind in ("junk_row", "declared_duplicate"):
+            key = "id_pattern" if self.kind == "junk_row" else "pattern"
+            try:
+                groups = re.compile(str(self.params[key])).groups
+            except re.error as exc:
+                raise ValueError(f"{self.kind} params.{key} is not a valid regex: {exc}") from exc
+            if self.kind == "declared_duplicate" and groups != 1:
+                raise ValueError("declared_duplicate params.pattern needs exactly one capture group")
         return self
 
 

@@ -135,3 +135,15 @@ def test_gold_needs_a_current_silver_build(gold_run, tmp_path) -> None:
     edited.write_text(stale)
     with pytest.raises(gold.GoldError, match="no current silver build"):
         gold.build_gold(run_id, SCHEMA, approved_path=edited)
+
+
+def test_values_outside_a_standard_list_are_unknown_in_gold(gold_run, conn) -> None:
+    run_id, path = gold_run
+    rules = SilverRules.model_validate(__import__("yaml").safe_load(path.read_text()))
+    cols = [c.model_copy(update={"mapping": {"high": []}}) if c.name == "priority" else c for c in rules.columns]
+    path.write_text(to_yaml(rules.model_copy(update={"columns": cols})))
+    silver.build_silver(run_id, path)
+    gold.build_gold(run_id, SCHEMA, approved_path=path)
+    prio = {r["ticket_id"]: r["priority"] for r in rows(conn, "SELECT ticket_id, priority FROM G.fact_tickets")}
+    assert prio["T1"] == "high" and prio["T3"] is None  # 'low' is not in the approved list
+    assert {r["priority"] for r in rows(conn, "SELECT DISTINCT priority FROM G.resolution_sla")} == {"high", "(unknown)"}

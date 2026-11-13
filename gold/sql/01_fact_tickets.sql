@@ -2,7 +2,7 @@
 CREATE TABLE {schema}.fact_tickets AS
 WITH base AS (
     SELECT s.bronze_id, s.{id}::text AS ticket_id, {category_final} AS category, {category_source} AS category_source,
-           s.{priority} AS priority, s.{location} AS building, s.{status} AS status,
+           {priority_value} AS priority, {location_value} AS building, s.{status} AS status,
            s.{opened} AS created_at, s.{closed} AS resolved_at, s.{sla}::numeric AS sla_hours, s.{money}::numeric AS cost,
            coalesce(s.{status} = ANY({resolved_statuses}), false) AS is_resolved
       FROM {silver} s
@@ -27,6 +27,7 @@ ALTER TABLE {schema}.fact_tickets ADD PRIMARY KEY (bronze_id);
 COMMENT ON TABLE {schema}.fact_tickets IS 'One row per usable silver ticket (kept + flagged; rejected and duplicate rows are not tickets). Flagged rows are INCLUDED here; time metrics exclude them only through usable_for_time_metrics.';
 COMMENT ON COLUMN {schema}.fact_tickets.category IS 'Final category: the rule value when it is a standard value (category_source = rule), else the AI label when confidence >= ai_min_confidence (ai), else NULL (none).';
 COMMENT ON COLUMN {schema}.fact_tickets.category_source IS 'rule | ai | none - where the final category came from.';
+COMMENT ON COLUMN {schema}.fact_tickets.priority IS 'A standard value of the approved priority rule; values outside its list are NULL (reported as (unknown)), never shown as their own priority.';
 COMMENT ON COLUMN {schema}.fact_tickets.created_month IS 'First day of the month of created_at; NULL when created_at is unknown.';
 COMMENT ON COLUMN {schema}.fact_tickets.is_resolved IS 'status is one of resolved_statuses (gold/model.yaml). Missing status = not resolved.';
 COMMENT ON COLUMN {schema}.fact_tickets.resolution_hours IS 'resolved_at - created_at in hours, whenever both exist (can be negative: see usable_for_time_metrics).';

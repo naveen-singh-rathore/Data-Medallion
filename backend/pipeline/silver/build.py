@@ -41,7 +41,7 @@ from pipeline.silver.rules_schema import (
 )
 
 STATUSES = ("kept", "flagged", "rejected", "duplicate")
-STATUS_SQL = ("CASE WHEN c._rejected THEN 'rejected' WHEN c._dup_rank > 1 THEN 'duplicate'"
+STATUS_SQL = ("CASE WHEN c._rejected THEN 'rejected' WHEN c._dup_rank > 1 OR c._duplicate_of IS NOT NULL THEN 'duplicate'"
               " WHEN cardinality(c._errors) > 0 THEN 'flagged' ELSE 'kept' END")  # fmt: skip
 
 

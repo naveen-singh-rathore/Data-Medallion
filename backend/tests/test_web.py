@@ -370,7 +370,7 @@ def test_leftover_values_are_chosen_in_the_ui_and_a_finished_review_reopens(prop
     assert approved_file.exists() and c.get(url).json()["state"] == "approved"
     assert c.post(f"{url}/values", json={"column": "state", "choices": [{"value": "open", "action": "new"}]}).status_code == 409
     assert c.post(f"{url}/reopen").json()["ok"] is True
-    assert not approved_file.exists() and (path.parent / "approved_before_reopen.yaml").exists()
+    assert approved_file.exists() and "Done" not in approved_file.read_text()  # still approved until finished
     r = c.get(url).json()
     assert r["state"] == "proposed" and r["agent_status"] == "awaiting_approval"
     assert c.get(f"{url}/yaml").json()["editable"] is True

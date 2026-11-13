@@ -1,0 +1,8 @@
+id,category,description,notes,amount,owner
+T-1,hvac,AC broken,,10,Ann
+T-2,The AC unit on floor 2 is not working at all today,HVAC,,20,Bob
+T-3,plumbing,leak,Duplicate of ticket #1. Closing.,30,Cy
+T-4,,,,,
+X99,hvac,noise,,5,Dee
+T-6,Another long sentence about a leaking pipe in room 5,unknownlabel,,7,Eve
+T-7,Plumbing,dripping tap,duplicate of Ticket 3,8,Fay

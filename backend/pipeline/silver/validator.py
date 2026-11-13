@@ -26,7 +26,12 @@ from pipeline.db import get_ro_conn, transaction
 from pipeline.profile_dates import format_by_id, format_ids, is_ambiguous_shape
 from pipeline.profile_values import normalization_key
 from pipeline.silver.compiler import OUTPUT_COLUMNS, compile_rules
-from pipeline.silver.rules_schema import NUMBER_STEPS, TEXT_STEPS, SilverRules
+from pipeline.silver.rules_schema import (
+    NUMBER_STEPS,
+    ROW_CHECK_COLUMNS,
+    TEXT_STEPS,
+    SilverRules,
+)
 
 SAMPLE_ROWS = 2000
 DRY_RUN_TIMEOUT = "10s"
@@ -173,10 +178,16 @@ def _reference_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
             if col not in types:
                 errors.append(f"dedup: {col!r} is not a target column")
     for i, check in enumerate(rules.row_checks):
-        cols = [v for k, v in check.params.items() if k != "values" and isinstance(v, str)]
+        cols = [str(check.params[k]) for k in ROW_CHECK_COLUMNS[check.kind]]
         for col in cols:
             if col not in types:
                 errors.append(f"row_checks[{i}] ({check.kind}): {col!r} is not a target column")
+        if check.kind == "swapped_columns" and all(c in types for c in cols):
+            a = next(c for c in rules.columns if c.name == cols[0])
+            if not a.mapping:
+                errors.append(f"row_checks[{i}] (swapped_columns): {cols[0]!r} needs a standard-value mapping to recognise its labels")
+            if any(types[c] != "text" for c in cols):
+                errors.append(f"row_checks[{i}] (swapped_columns): both columns must be text")
         if check.kind == "date_order" and any(types.get(c) not in DATE_TYPES for c in cols if c in types):
             errors.append(f"row_checks[{i}] (date_order): both columns must be date/timestamp")
     cited = [(f"columns ({c.name}).addresses", a) for c in rules.columns for a in c.addresses]

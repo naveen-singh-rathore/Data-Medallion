@@ -128,6 +128,8 @@ FLAGS = {
     "unparseable": "Could not be read as the expected type (now empty)",
     "out_of_range": "Outside the allowed range (now empty)",
     "nulled_by_row_check": "Emptied by a row check",
+    "swapped": "Values of two columns were swapped back",
+    "declared_duplicate": "The ticket says it duplicates another",
     "ai_labelled": "Label recovered by AI from the ticket text (see the _ai column)",
     "ai_low_confidence": "AI was unsure; no label recovered",
 }
@@ -181,16 +183,24 @@ def describe_column_rule(rule: dict[str, Any]) -> list[str]:
 
 
 ROW_CHECKS = {
+    "swapped_columns": lambda p: (f"when {p['a']} holds a sentence and {p['b']} holds one of {p['a']}'s known values, "
+                                  f"swap the two (columns that were entered the wrong way round)"),
+    "junk_row": lambda p: (f"rows with at least {float(p['min_empty_share']):.0%} of their cells empty or placeholders, "
+                           f"or whose {p['id']} does not match {p['id_pattern']}, are junk"),
+    "declared_duplicate": lambda p: (f"when {p['source']} says the ticket duplicates another (pattern {p['pattern']}), "
+                                     f"record which one in _duplicate_of"),
     "date_order": lambda p: f"{p['a']} must not be after {p['b']}",
     "required_if": lambda p: f"{p['column']} is required when {p['other']} is one of {', '.join(p['values'])}",
     "not_both_null": lambda p: f"{p['a']} and {p['b']} must not both be empty",
 }
-ROW_ACTIONS = {"reject": "the row is rejected", "null_second": "the second value is emptied", "flag": "the row is flagged"}
+ROW_ACTIONS = {"reject": "the row is rejected", "null_second": "the second value is emptied", "flag": "the row is flagged",
+               "swap": "the values are swapped and flagged", "duplicate": "the row is marked a duplicate (kept, not counted)"}
 
 
 def describe_row_check(check: dict[str, Any]) -> str:
     rule = ROW_CHECKS.get(check["kind"], lambda p: check["kind"])(check["params"])
-    return f"{rule[0].upper()}{rule[1:]}; otherwise {ROW_ACTIONS.get(check['action'], check['action'])}."
+    link = "; then" if check["action"] in ("swap", "duplicate") or check["kind"] == "junk_row" else "; otherwise"
+    return f"{rule[0].upper()}{rule[1:]}{link} {ROW_ACTIONS.get(check['action'], check['action'])}."
 
 
 def describe_dedup(dedup: dict[str, Any]) -> str:
@@ -242,7 +252,8 @@ def error_label(error: str, types: dict[str, str] | None = None) -> str:
         _, kind, cols = error.split(":", 2)
         a, _, b = cols.partition(",")
         return {"date_order": f"{a} is later than {b}", "not_both_null": f"{a} and {b} are both empty",
-                "required_if": f"{a} is missing although {b} requires it"}.get(kind, error)  # fmt: skip
+                "required_if": f"{a} is missing although {b} requires it",
+                "junk_row": "junk row (mostly empty, or an invalid id)"}.get(kind, error)  # fmt: skip
     col, _, kind = error.rpartition(":")
     return ERRORS.get(kind, error).format(col=col, type=TYPES.get((types or {}).get(col, ""), "the expected type"))
 
