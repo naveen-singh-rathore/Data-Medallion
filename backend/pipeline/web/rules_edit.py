@@ -121,45 +121,62 @@ def set_values(run_id: uuid.UUID, column: str, choices: list[dict[str, Any]]) ->
         raise ValueError(f"no rule for column {column!r}")
     mapping: dict[str, list[str]] = {k: list(v) for k, v in (rule.get("mapping") or {}).items()}
     for choice in choices:
-        action, value, target = choice.get("action"), str(choice.get("value") or "").strip(), choice.get("target")
-        if action not in VALUE_ACTIONS:
-            raise ValueError(f"unknown action {action!r}")
-        if action == "keep":
-            continue
-        if not value:
-            raise ValueError("a value is required")
-        if action == "merge" and target not in mapping:
-            raise ValueError(f"{target!r} is not a standard value of {column}")
-        spellings = {value.lower(), *(str(x).strip().lower() for x in choice.get("spellings") or [])}
-        for variants in mapping.values():  # a value belongs to one place only
-            if action != "remove" and value in variants:
-                variants.remove(value)
-        if action != "empty":  # undo an earlier "treat as empty"
-            rule["null_tokens"] = [t for t in rule.get("null_tokens", []) if t.lower() not in spellings]
-        if action in ("merge", "empty", "remove") and value in mapping and target != value:
-            if mapping[value]:
-                raise ValueError(f"{value!r} is a standard value with its own spellings; move those first")
-            del mapping[value]  # undo an earlier "new standard value"
-        if action != "new":
-            # a standard value left with no spellings whose own name matches this value existed only for it
-            # (an earlier "new standard value"); it would keep matching the value by name, so it goes too
-            key = normalization_key(value)
-            for name in [t for t, vs in mapping.items() if not vs and t != target and normalization_key(t) == key]:
-                del mapping[name]
-        if action == "merge":
-            mapping[target].append(value)
-        elif action == "new":
-            mapping.setdefault(value, [])
-        elif action == "empty":  # null tokens match exact spellings (any case), so every spelling is listed
-            tokens = list(rule.get("null_tokens", []))
-            for spelling in [value, *(str(x).strip() for x in choice.get("spellings") or [])]:
-                if spelling and spelling.lower() not in {t.lower() for t in tokens}:
-                    tokens.append(spelling)
-            rule["null_tokens"] = tokens
-        elif action == "remove" and target in mapping and value in mapping[target]:
-            mapping[target].remove(value)
+        _apply_choice(rule, mapping, choice, column)
     rule["mapping"] = mapping or None
     return save(run_id, to_yaml(SilverRules.model_validate(rules)))
+
+
+def _apply_choice(rule: dict[str, Any], mapping: dict[str, list[str]], choice: dict[str, Any], column: str) -> None:
+    """Apply one review choice to a column rule (in place): release the value, then place it."""
+    action, value, target = choice.get("action"), str(choice.get("value") or "").strip(), choice.get("target")
+    if action not in VALUE_ACTIONS:
+        raise ValueError(f"unknown action {action!r}")
+    if action == "keep":
+        return
+    if not value:
+        raise ValueError("a value is required")
+    if action == "merge" and target not in mapping:
+        raise ValueError(f"{target!r} is not a standard value of {column}")
+    extra = [str(x).strip() for x in choice.get("spellings") or []]
+    _release_value(rule, mapping, action, value, target, {value.lower(), *(x.lower() for x in extra)})
+    _place_value(rule, mapping, action, value, target, extra)
+
+
+def _release_value(rule: dict[str, Any], mapping: dict[str, list[str]], action: str, value: str,
+                   target: str | None, spellings: set[str]) -> None:  # fmt: skip
+    """Undo wherever an earlier choice put the value, so it ends up in exactly one place."""
+    for variants in mapping.values():  # a value belongs to one place only
+        if action != "remove" and value in variants:
+            variants.remove(value)
+    if action != "empty":  # undo an earlier "treat as empty"
+        rule["null_tokens"] = [t for t in rule.get("null_tokens", []) if t.lower() not in spellings]
+    if action in ("merge", "empty", "remove") and value in mapping and target != value:
+        if mapping[value]:
+            raise ValueError(f"{value!r} is a standard value with its own spellings; move those first")
+        del mapping[value]  # undo an earlier "new standard value"
+    if action != "new":
+        # a standard value left with no spellings whose own name matches this value existed only for it
+        # (an earlier "new standard value"); it would keep matching the value by name, so it goes too
+        key = normalization_key(value)
+        for name in [t for t, vs in mapping.items() if not vs and t != target and normalization_key(t) == key]:
+            del mapping[name]
+
+
+def _place_value(rule: dict[str, Any], mapping: dict[str, list[str]], action: str, value: str,
+                 target: str | None, extra_spellings: list[str]) -> None:  # fmt: skip
+    """Put the value where the person chose: a standard value, its own value, empty, or nowhere."""
+    if action == "merge":
+        mapping[target].append(value)  # type: ignore[index]  # checked: target is a standard value
+    elif action == "new":
+        mapping.setdefault(value, [])
+    elif action == "empty":  # null tokens match exact spellings (any case), so every spelling is listed
+        tokens = list(rule.get("null_tokens", []))
+        for spelling in [value, *extra_spellings]:
+            if spelling and spelling.lower() not in {t.lower() for t in tokens}:
+                tokens.append(spelling)
+        rule["null_tokens"] = tokens
+    elif action == "remove" and target in mapping and value in mapping[target]:
+        mapping[target].remove(value)
 
 
 def reopen(run_id: uuid.UUID) -> dict[str, Any]:
