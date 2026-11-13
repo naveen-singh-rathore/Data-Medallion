@@ -28,6 +28,7 @@ class Settings:
     llm_mode: str  # live | replay | record (see pipeline/llm.py)
     card_budget_tokens: int
     card_chars_per_token: float  # token estimate when no exact count exists (measured ~1.94 on raw_tickets)
+    classify_concurrency: int  # parallel classification batches (bounded by the provider's rate limit)
 
 
 def _load() -> Settings:
@@ -50,6 +51,7 @@ def _load() -> Settings:
         llm_mode=llm_mode,
         card_budget_tokens=int(os.getenv("CARD_BUDGET_TOKENS", "4000")),
         card_chars_per_token=float(os.getenv("CARD_CHARS_PER_TOKEN", "2")),
+        classify_concurrency=max(1, int(os.getenv("CLASSIFY_CONCURRENCY", "4"))),
     )
 
 

@@ -1,7 +1,12 @@
 """Semantic classification: targets, closed list, confidence threshold, cache, silver columns, eval."""
 
 import csv
+import dataclasses
 import json
+import threading
+import time
+import uuid
+from types import SimpleNamespace
 
 import pytest
 from fakes import ExplodingClient, FakeResponse
@@ -128,3 +133,44 @@ def test_eval_sheet_and_scoring(built, tmp_path) -> None:
         result["coverage"],
         result["accuracy_confident"],
     ) == (2, 2, 1.0, 0.5, 1.0)
+
+
+class SlowLabelMessages(LabelMessages):
+    """LabelMessages that takes a moment and records how many calls were in flight at once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lock, self.active, self.peak = threading.Lock(), 0, 0
+
+    def create(self, **kwargs):
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        time.sleep(0.2)
+        try:
+            return super().create(**kwargs)
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+def test_batches_run_in_parallel_with_the_same_results(built, conn, monkeypatch) -> None:
+    run_id, _ = built
+    rule = ColumnRule(name="state", source="state", type="text", confidence=0.8, why="State drives counts.",
+                      mapping={"closed": ["Closed"], "open": ["Open"]})  # fmt: skip
+    salt = uuid.uuid4().hex[:8]  # texts unique to this test, so nothing is cached yet
+    texts = [f"In-Progress ticket {salt} #{i}" for i in range(2 * classify.BATCH + 7)]  # three batches
+    client = SimpleNamespace(messages=SlowLabelMessages())
+    monkeypatch.setattr(classify, "settings", dataclasses.replace(classify.settings, classify_concurrency=3))
+    try:
+        results, usage = classify.classify_texts(texts, rule, run_id, None, mode="live", client=client)
+        assert client.messages.peak > 1  # the batches overlapped
+        assert usage["llm_calls"] == 3 and usage["missing"] == 0
+        assert results == {t: ("open", 0.9) for t in texts}  # every text, in the right place
+        again, usage = classify.classify_texts(texts, rule, run_id, None, mode="live", client=client)
+        assert again == results and usage["llm_calls"] == 0 and usage["cache_hits"] == len(texts)
+    finally:
+        hashes = [classify.text_hash(t, classify.labels_for(rule), classify.settings.cheap_model) for t in texts]
+        conn.execute("DELETE FROM meta.classification_cache WHERE text_hash = ANY(%s)", (hashes,))
+        conn.execute("DELETE FROM meta.llm_cache WHERE request_hash IN (SELECT request_hash FROM meta.llm_calls"
+                     " WHERE run_id = %s AND purpose = %s)", (run_id, classify.TASK))  # fmt: skip

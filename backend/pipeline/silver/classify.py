@@ -25,6 +25,7 @@ import random
 import time
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -176,22 +177,35 @@ def classify_texts(texts: list[str], rule: ColumnRule, run_id: str, context: Any
     todo = [t for t in texts if hashes[t] not in cached]
     usage = {"unique_texts": len(texts), "cache_hits": len(results), "llm_calls": 0, "cost_usd": 0.0, "missing": 0,
              "call_latency_ms": []}  # fmt: skip
-    for start in range(0, len(todo), BATCH):
-        batch = todo[start : start + BATCH]
-        answers, result = _ask(rule, labels, batch, run_id, context, mode, client)
-        usage["llm_calls"] += 1
-        usage["cost_usd"] += float(result.cost_usd)
-        usage["call_latency_ms"].append(result.latency_ms)
-        usage["missing"] += len(batch) - len(answers)
-        with transaction() as conn:
-            for i, (label, conf) in answers.items():
-                conn.execute(
-                    "INSERT INTO meta.classification_cache (text_hash, task, prompt_version, model, label, confidence, call_id)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (text_hash) DO NOTHING",
-                    (hashes[batch[i]], TASK, PROMPT_VERSION, model, label, round(conf, 3), result.call_id),
-                )  # fmt: skip
-                results[batch[i]] = (label, round(conf, 3))
+    batches = [todo[start : start + BATCH] for start in range(0, len(todo), BATCH)]
+    # Batches are independent and cached per text, so they run in parallel (bounded); results are
+    # consumed in batch order, so cache writes and usage totals are the same as a sequential run.
+    workers = max(1, min(settings.classify_concurrency, len(batches)))
+    log = get_logger("classify", run_id=run_id)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="classify") as pool:
+        asked = pool.map(lambda batch: _ask(rule, labels, batch, run_id, context, mode, client), batches)
+        for n, (batch, (answers, result)) in enumerate(zip(batches, asked, strict=True), start=1):
+            _record_batch(batch, answers, result, hashes, model, results, usage)
+            log.debug("batch labelled", batch=n, of=len(batches), texts=len(batch), answered=len(answers),
+                      latency_ms=result.latency_ms, cache_hit=result.cache_hit)  # fmt: skip
     return results, usage
+
+
+def _record_batch(batch: list[str], answers: dict[int, tuple[str, float]], result: Any, hashes: dict[str, str],
+                  model: str, results: dict[str, tuple[str, float]], usage: dict[str, Any]) -> None:  # fmt: skip
+    """Store one batch's labels in the classification cache and add its cost/latency to `usage`."""
+    usage["llm_calls"] += 1
+    usage["cost_usd"] += float(result.cost_usd)
+    usage["call_latency_ms"].append(result.latency_ms)
+    usage["missing"] += len(batch) - len(answers)
+    with transaction() as conn:
+        for i, (label, conf) in answers.items():
+            conn.execute(
+                "INSERT INTO meta.classification_cache (text_hash, task, prompt_version, model, label, confidence, call_id)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (text_hash) DO NOTHING",
+                (hashes[batch[i]], TASK, PROMPT_VERSION, model, label, round(conf, 3), result.call_id),
+            )  # fmt: skip
+            results[batch[i]] = (label, round(conf, 3))
 
 
 # --- apply to silver -----------------------------------------------------------------------------
