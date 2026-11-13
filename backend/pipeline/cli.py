@@ -57,6 +57,16 @@ def _build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--run-id", type=uuid.UUID)
     defaults = sub.add_parser("default-rules", help="write default rules for issue-free columns (YAML to stdout)")
     defaults.add_argument("--run-id", type=uuid.UUID)
+    for name, text in [("dq-run", "run the DQ agent until it pauses or ends"), ("dq-status", "agent thread status"),
+                       ("dq-approve", "approve the proposed rules (re-reads proposed.yaml)"),
+                       ("dq-reject", "reject the proposed rules"), ("dq-context-approve", "approve context and resume")]:
+        dq = sub.add_parser(name, help=text)
+        dq.add_argument("--run-id", type=uuid.UUID)
+        if name == "dq-run":
+            dq.add_argument("--fresh", action="store_true", help="start a new thread instead of the latest")
+        if name == "dq-reject":
+            dq.add_argument("--reason", required=True)
+    sub.add_parser("dq-graph", help="write docs/dq_agent_graph.md (mermaid)")
     run_all = sub.add_parser("run-all", help="ingest a CSV, profile it, add context, render the card")
     run_all.add_argument("path", help="path to the CSV file")
     run_all.add_argument("--force", action="store_true", help="reload even if already ingested")
@@ -161,6 +171,25 @@ def _tool(name: str, raw_args: str, run_id: uuid.UUID) -> None:
     print(json.dumps(run_tool(name, json.loads(raw_args), run_id), indent=2, ensure_ascii=False, default=str))
 
 
+def _dq(args: argparse.Namespace) -> None:
+    from pipeline.dq_agent import (
+        runner,  # local: LangGraph is only needed for these commands
+    )
+
+    if args.command == "dq-graph":
+        print(runner.write_mermaid())
+        return
+    run_id = str(args.run_id or latest_succeeded_run())
+    result = {
+        "dq-run": lambda: runner.run(run_id, fresh=args.fresh),
+        "dq-status": lambda: runner.status(run_id),
+        "dq-approve": lambda: runner.resume(run_id, {"action": "approve"}),
+        "dq-reject": lambda: runner.resume(run_id, {"action": "reject", "reason": args.reason}),
+        "dq-context-approve": lambda: runner.context_approve(run_id),
+    }[args.command]()
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "init-db":
@@ -192,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.ok else 1
     elif args.command == "default-rules":
         print(to_yaml(default_rules(args.run_id or latest_succeeded_run())))
+    elif args.command.startswith("dq-"):
+        _dq(args)
     elif args.command == "run-all":
         run_id = ingest_file(args.path, force=args.force)
         print(format_funnel(get_run(run_id)))

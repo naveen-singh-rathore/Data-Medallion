@@ -54,6 +54,9 @@ class ColumnRule(_Strict):
     confidence: float = Field(ge=0, le=1)
     why: str = Field(min_length=20, description="business impact of this rule")
     addresses: list[str] = Field(default_factory=list, description="issue ids this rule resolves")
+    generated_by: Literal["agent", "default", "human"] | None = Field(
+        default=None, description="who wrote this column rule (set by the pipeline; agents may omit it)"
+    )
 
 
 class DedupRule(_Strict):
@@ -137,9 +140,19 @@ def rules_hash(rules: SilverRules) -> str:
 
 
 def to_yaml(rules: SilverRules) -> str:
-    """Only non-default fields (plus version and target), so files stay short to review."""
+    """Only non-default fields (plus version and target), so files stay short to review.
+
+    Free-form maps (mapping targets, row-check params) are written in sorted order: the same
+    rules must give the same bytes whether they came from the API or from the jsonb cache,
+    which reorders object keys.
+    """
     data = {"schema_version": rules.schema_version, "target_table": rules.target_table,
             **rules.model_dump(mode="json", exclude_none=True, exclude_defaults=True)}  # fmt: skip
+    for column in data.get("columns", []):
+        if isinstance(column.get("mapping"), dict):
+            column["mapping"] = dict(sorted(column["mapping"].items()))
+    for check in data.get("row_checks", []):
+        check["params"] = dict(sorted(check["params"].items()))
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=110)
 
 

@@ -14,7 +14,7 @@ import hashlib
 import json
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -67,6 +67,8 @@ class LLMResult:
     cost_usd: Decimal
     latency_ms: int
     cache_hit: bool
+    content: list[dict[str, Any]] = field(default_factory=list)  # raw content blocks (text, thinking, tool_use)
+    stop_reason: str | None = None
 
 
 def canonical_json(value: Any) -> str:
@@ -77,14 +79,20 @@ def request_hash(
     model: str,
     prompt_version: str,
     messages: list[dict[str, Any]],
-    system: str | None = None,
+    system: str | list[dict[str, Any]] | None = None,
     json_schema: dict[str, Any] | None = None,
     tools: list[dict[str, Any]] | None = None,
     effort: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> str:
-    """sha256 over everything that changes the answer, as canonical JSON (key order irrelevant)."""
+    """sha256 over everything that changes the answer, as canonical JSON (key order irrelevant).
+
+    `options` joins the hash only when given, so recordings made without it stay valid.
+    """
     payload = {"model": model, "prompt_version": prompt_version, "system": system, "messages": messages,
                "json_schema": json_schema, "tools": tools, "effort": effort}  # fmt: skip
+    if options:
+        payload["options"] = options
     return hashlib.sha256(canonical_json(payload).encode()).hexdigest()
 
 
@@ -158,15 +166,19 @@ def call_llm(
     json_schema: dict[str, Any] | None = None,
     tools: list[dict[str, Any]] | None = None,
     *,
-    system: str | None = None,
+    system: str | list[dict[str, Any]] | None = None,
     effort: str | None = None,
+    options: dict[str, Any] | None = None,
     mode: str | None = None,
     client: Any = None,
 ) -> LLMResult:
-    """One logged, cached LLM request. With json_schema the answer is constrained to it and parsed."""
+    """One logged, cached LLM request. With json_schema the answer is constrained to it and parsed.
+
+    `options`: extra request fields (thinking, max_tokens, extra_headers for betas, extra_body).
+    """
     mode = mode or settings.llm_mode
     log = get_logger("llm", run_id=str(run_id) if run_id else "-")
-    key = request_hash(model, prompt_version, messages, system, json_schema, tools, effort)
+    key = request_hash(model, prompt_version, messages, system, json_schema, tools, effort, options)
     call_id = uuid.uuid4()
     started = time.perf_counter()
     base = {"call_id": call_id, "run_id": run_id, "purpose": purpose, "provider": settings.llm_provider,
@@ -180,7 +192,7 @@ def call_llm(
                     f"replay mode: no cached response for {purpose} (request {key[:12]}). "
                     "Run once with LLM_MODE=live or record and an API key to record it."
                 )
-            response = _call_api(client or make_client(), model, messages, system, json_schema, tools, effort)
+            response = _call_api(client or make_client(), model, messages, system, json_schema, tools, effort, options)
         _check_stop(response)
         text = _text_of(response)
         data = _parse_json(text) if json_schema else None
@@ -198,7 +210,7 @@ def call_llm(
         call_id=call_id, text=text, data=data, model=model, request_hash=key,
         input_tokens=usage.get("input_tokens") or 0, output_tokens=usage.get("output_tokens") or 0,
         cached_tokens=usage.get("cache_read_input_tokens") or 0, cost_usd=spent, latency_ms=latency,
-        cache_hit=cache_hit,
+        cache_hit=cache_hit, content=response.get("content", []), stop_reason=response.get("stop_reason"),
     )  # fmt: skip
     _log_call(base | {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
                       "cached_tokens": result.cached_tokens, "cost_usd": spent, "latency_ms": latency,
@@ -212,10 +224,11 @@ def _call_api(
     client: Any,
     model: str,
     messages: list[dict[str, Any]],
-    system: str | None,
+    system: str | list[dict[str, Any]] | None,
     json_schema: dict[str, Any] | None,
     tools: list[dict[str, Any]] | None,
     effort: str | None,
+    options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_config: dict[str, Any] = {}
     if effort:
@@ -229,6 +242,7 @@ def _call_api(
         kwargs["tools"] = tools
     if output_config:
         kwargs["output_config"] = output_config
+    kwargs |= options or {}
     try:
         response = client.messages.create(**kwargs)
     except Exception as exc:  # SDK has already retried transient errors

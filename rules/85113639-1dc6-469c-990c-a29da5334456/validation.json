@@ -1,0 +1,136 @@
+{
+  "ok": true,
+  "layer": "coverage",
+  "errors": [],
+  "warnings": [
+    "columns (category).mapping: variants never seen in the data: ['Electric']",
+    "rows: 22.6% of sampled rows have errors (> 10%)"
+  ],
+  "stats": {
+    "columns": {
+      "resolution_notes": {
+        "null_before": 0.1395,
+        "null_after": 0.1395,
+        "invalid": 0.0,
+        "newly_null_share": 0.0,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "ticket_id": {
+        "null_before": 0.0005,
+        "null_after": 0.0005,
+        "invalid": 0.0,
+        "newly_null_share": 0.0,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "created_at": {
+        "null_before": 0.0005,
+        "null_after": 0.046,
+        "invalid": 0.045,
+        "newly_null_share": 0.04552276138069034,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "resolved_at": {
+        "null_before": 0.4935,
+        "null_after": 0.513,
+        "invalid": 0.0185,
+        "newly_null_share": 0.0384995064165844,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "category": {
+        "null_before": 0.0,
+        "null_after": 0.001,
+        "invalid": 0.0,
+        "newly_null_share": 0.001,
+        "sentinel_hits": 0,
+        "mapped": 1253,
+        "unmapped": 550
+      },
+      "priority": {
+        "null_before": 0.0925,
+        "null_after": 0.093,
+        "invalid": 0.0,
+        "newly_null_share": 0.0005509641873278236,
+        "sentinel_hits": 0,
+        "mapped": 205,
+        "unmapped": 421
+      },
+      "status": {
+        "null_before": 0.0,
+        "null_after": 0.0015,
+        "invalid": 0.0,
+        "newly_null_share": 0.0015,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "building": {
+        "null_before": 0.0,
+        "null_after": 0.001,
+        "invalid": 0.0,
+        "newly_null_share": 0.001,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "description": {
+        "null_before": 0.0115,
+        "null_after": 0.012,
+        "invalid": 0.0,
+        "newly_null_share": 0.0005058168942842691,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "submitted_by": {
+        "null_before": 0.0005,
+        "null_after": 0.0005,
+        "invalid": 0.0,
+        "newly_null_share": 0.0,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "assigned_to": {
+        "null_before": 0.3205,
+        "null_after": 0.3205,
+        "invalid": 0.0,
+        "newly_null_share": 0.0,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "cost": {
+        "null_before": 0.2465,
+        "null_after": 0.3695,
+        "invalid": 0.0005,
+        "newly_null_share": 0.16323822163238222,
+        "sentinel_hits": 31,
+        "mapped": 0,
+        "unmapped": 0
+      },
+      "sla_hours": {
+        "null_before": 0.1825,
+        "null_after": 0.3365,
+        "invalid": 0.0,
+        "newly_null_share": 0.18837920489296636,
+        "sentinel_hits": 107,
+        "mapped": 0,
+        "unmapped": 0
+      }
+    },
+    "rows": {
+      "sampled": 2000,
+      "with_errors": 0.2255,
+      "rejected": 1,
+      "dedup_removed": 0
+    }
+  }
+}

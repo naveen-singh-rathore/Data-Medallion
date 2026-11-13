@@ -23,8 +23,12 @@ PEOPLE = ["Alice Moreno", "Bilal Khan", "Chen Wei"]
 
 @pytest.fixture
 def live(monkeypatch):
-    """call_llm in live mode (the fake client stands in for the API)."""
-    monkeypatch.setattr(llm, "settings", dataclasses.replace(llm.settings, llm_mode="live"))
+    """call_llm in record mode: the fake client stands in for the API and is always called.
+
+    Not "live": context prompts don't contain the run id, so a cached response from an earlier
+    test run can match and the fake would silently not be called (a flaky test).
+    """
+    monkeypatch.setattr(llm, "settings", dataclasses.replace(llm.settings, llm_mode="record"))
 
 
 @pytest.fixture

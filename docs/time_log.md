@@ -10,3 +10,4 @@
 | 3c. Profiler v1.2 | _fill in_ | DATE_ORDER investigation (real data, not parsing), format-pair evidence, duplicate stats + key-repeat hints, examples on every issue, number kinds, zero_share; 7 new tests |
 | 4b. Step 4 fix-ups | _fill in_ | Exact-token budget, compact card (3,498 → 2,356 tokens), central data minimization, context v2 + human/inferred compare; 13 new/updated tests |
 | 5. Rule schema, compiler, validator, agent tools | _fill in_ | Strict rule schema + JSON schema, SQL compiler with safe casts, 4-layer validator, default rules, 7 read-only masked tools + registry + call log; 32 new tests |
+| 6. LangGraph DQ agent | _fill in_ | Graph with tool loop, budget, validation retries, context + approval interrupts, Postgres checkpoints, compaction, agent_runs metrics, replay determinism; 11 new tests; real run: 15 turns, $0.72, 137 s |

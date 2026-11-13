@@ -99,6 +99,14 @@ cd backend
 ../.venv/bin/python -m pipeline.cli tool list_issues --args '{"severity": "high"}'
 ```
 
+## DQ agent
+
+`python -m pipeline.cli dq-run` runs the agent until it pauses (context approval or rule
+approval); `dq-status`, `dq-approve`, `dq-reject --reason`, `dq-context-approve` drive the
+pauses. Graph: [docs/dq_agent_graph.md](docs/dq_agent_graph.md). On raw_tickets (Opus 5.5,
+record mode): 15 turns, 22 tool calls, 0 failed validations, $0.72, 137 s; the proposal is in
+`rules/<run_id>/proposed.yaml` awaiting approval. `LLM_MODE=replay` reproduces it with no key.
+
 ## Scaling to 100x
 
 - **Bronze:** one transaction per run is fine for ~10k rows. For very large files,

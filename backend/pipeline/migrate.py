@@ -25,5 +25,15 @@ def migrate(sql_dir: Path = settings.sql_dir) -> int:
         with transaction() as conn:
             conn.execute(path.read_text())  # type: ignore[arg-type]  # trusted repo SQL
         log.info("applied sql file", file=path.name)
+    setup_checkpointer()
     log.info("migration complete", files=len(files))
     return len(files)
+
+
+def setup_checkpointer() -> None:
+    """Create/upgrade LangGraph's checkpoint tables (idempotent; the library owns their DDL)."""
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    with PostgresSaver.from_conn_string(settings.database_url) as saver:
+        saver.setup()
+    log.info("checkpointer ready")

@@ -42,7 +42,7 @@ def default_column_rule(profile: dict[str, Any]) -> ColumnRule:
         name=target_name(profile["column"]), source=profile["column"], type=col_type,  # type: ignore[arg-type]
         steps=["trim", "remove_hidden_chars"],
         required=missing == 0 and profile["cardinality"]["role_hint"] == "candidate_key",
-        confidence=DEFAULT_CONFIDENCE, why=DEFAULT_WHY, **extra,
+        confidence=DEFAULT_CONFIDENCE, why=DEFAULT_WHY, generated_by="default", **extra,
     )  # fmt: skip
 
 
@@ -61,7 +61,8 @@ def default_rules(run_id: uuid.UUID | str) -> SilverRules:
 def merge_rules(default: SilverRules, agent: SilverRules) -> SilverRules:
     """Agent column rules replace defaults with the same source; everything else comes from the agent."""
     by_source = {c.source: c for c in default.columns}
-    by_source.update({c.source: c for c in agent.columns})
+    by_source.update({c.source: c.model_copy(update={"generated_by": c.generated_by or agent.generated_by})
+                      for c in agent.columns})  # fmt: skip
     order = [c.source for c in default.columns] + [c.source for c in agent.columns if c.source not in
                                                    {d.source for d in default.columns}]  # fmt: skip
     return agent.model_copy(update={"columns": [by_source[s] for s in order]})

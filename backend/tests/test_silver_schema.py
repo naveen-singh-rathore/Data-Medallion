@@ -39,3 +39,10 @@ def test_json_schema_for_the_agent_is_generated() -> None:
     schema = rules_json_schema()
     assert schema["additionalProperties"] is False
     assert "trim" in json.dumps(schema) and "day_month_order" in json.dumps(schema)
+
+
+def test_yaml_does_not_depend_on_mapping_key_order() -> None:
+    first = small_rules(RUN)
+    second = small_rules(RUN)
+    second["columns"][1]["mapping"] = dict(reversed(list(first["columns"][1]["mapping"].items())))
+    assert to_yaml(SilverRules.model_validate(first)) == to_yaml(SilverRules.model_validate(second))

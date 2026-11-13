@@ -59,7 +59,29 @@ def run_metrics(run_id: uuid.UUID) -> list[tuple[str, str]]:
         rows.append(("context source", "none"))
     calls, total, hits, errors = spend  # type: ignore[misc]
     rows.append(("LLM spend (run)", f"${total:.6f} over {calls} calls ({hits} cache hits, {errors} errors)"))
-    return rows
+    return rows + _agent_rows(run_id)
+
+
+def _agent_rows(run_id: uuid.UUID) -> list[tuple[str, str]]:
+    from pipeline.dq_agent.metrics import (
+        latest_agent_run,  # local: keeps `metrics` usable without LangGraph state
+    )
+
+    agent = latest_agent_run(str(run_id))
+    if not agent:
+        return [("DQ agent", "not run yet (dq-run)")]
+    by_name = ", ".join(f"{k} {v}" for k, v in sorted(agent["tool_calls_by_name"].items(), key=lambda kv: -kv[1]))
+    return [
+        ("DQ agent", f"{agent['status']} ({agent['thread_id']}, {agent['model']}, {agent['prompt_version']})"),
+        ("agent effort", (f"{agent['turns']} turns, {agent['tool_calls']} tool calls ({by_name or '-'}),"
+                         f" {agent['validation_attempts']} failed validations")),
+        ("agent tokens", (f"{agent['input_tokens']:,} in ({agent['cached_tokens']:,} cached) / {agent['output_tokens']:,} out,"
+                         f" ${agent['cost_usd']:.4f}, {(agent['duration_ms'] or 0) / 1000:.0f} s")),
+        ("agent coverage", (f"{agent['issues_addressed']} fixed + {agent['issues_ignored']} ignored of {agent['issues_total']}"
+                           f" required issues, {agent['needs_human_count']} questions for a human")),
+        ("agent columns", (f"{agent['columns_agent']} agent, {agent['columns_default']} default,"
+                          f" {agent['columns_human_edited']} human-edited")),
+    ]  # fmt: skip
 
 
 def format_rows(rows: list[tuple[str, str]]) -> str:
