@@ -43,6 +43,10 @@ max-returns = 8
 max-branches = 14
 
 [lint.per-file-ignores]
+# Pydantic copies a class docstring into the JSON schema sent to the model (tool inputs, SilverRules):
+# a docstring there changes the prompt and invalidates recorded answers. Guarded by tests/test_llm_contract.py.
+"backend/pipeline/agent_tools/tools.py" = ["D101"]
+"backend/pipeline/silver/rules_schema.py" = ["D101"]
 # Source timestamps carry no zone: profiling and date parsing compare wall-clock values on purpose.
 "backend/pipeline/profile_dates.py" = ["DTZ001", "DTZ007"]
 "backend/tests/**" = ["S101", "S105", "S608", "D1", "ANN", "ARG", "PLR", "C90", "DTZ001", "DTZ007"]
