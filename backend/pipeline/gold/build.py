@@ -63,7 +63,9 @@ def resolve_roles(rules: SilverRules, tags: dict[str, str], model: dict[str, Any
     missing = sorted((set(ROLE_TAGS) | {"opened", "closed"}) - set(roles))
     unknown = sorted(r for r, c in roles.items() if c not in names)
     if missing or unknown:
-        raise GoldError(f"cannot map gold roles: missing {missing}, unknown columns {unknown} (set them in gold/model.yaml)")
+        raise GoldError(
+            f"cannot map gold roles: missing {missing}, unknown columns {unknown} (set them in gold/model.yaml)"
+        )
     return roles
 
 
@@ -86,8 +88,10 @@ def _category_exprs(conn: Any, silver_table: tuple[str, str], rules: SilverRules
     rule = next((r for r in rules.columns if r.name == col), None)
     if rule and rule.mapping:
         canon = _text_array(list(rule.mapping))
-        return (sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN s.{c} END").format(c=c, k=canon),
-                sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN 'rule' ELSE 'none' END").format(c=c, k=canon))
+        return (
+            sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN s.{c} END").format(c=c, k=canon),
+            sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN 'rule' ELSE 'none' END").format(c=c, k=canon),
+        )
     return sql.SQL("s.{c}").format(c=c), sql.SQL("CASE WHEN s.{c} IS NULL THEN 'none' ELSE 'rule' END").format(c=c)
 
 
@@ -98,7 +102,9 @@ def _standard_only(rules: SilverRules, col: str) -> sql.Composable:
     """A role column with a standard-value list: values outside the list become NULL ((unknown) in marts)."""
     rule = next((r for r in rules.columns if r.name == col), None)
     if rule and rule.mapping:
-        return sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN s.{c} END").format(c=sql.Identifier(col), k=_text_array(list(rule.mapping)))
+        return sql.SQL("CASE WHEN s.{c} = ANY({k}) THEN s.{c} END").format(
+            c=sql.Identifier(col), k=_text_array(list(rule.mapping))
+        )
     return sql.SQL("s.{c}").format(c=sql.Identifier(col))
 
 
@@ -273,7 +279,9 @@ def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Pat
             for t in TABLES:
                 conn.execute(sql.SQL("DROP TABLE IF EXISTS {}.{}").format(staging, sql.Identifier(t)))
             for path in sorted((GOLD_DIR / "sql").glob("*.sql")):
-                conn.execute(sql.SQL(path.read_text()).format(**params))  # trusted repo SQL; values are Identifiers/Literals
+                conn.execute(
+                    sql.SQL(path.read_text()).format(**params)
+                )  # trusted repo SQL; values are Identifiers/Literals
             if escalated:
                 conn.execute(sql.SQL("COMMENT ON COLUMN {}.resolution_sla.escalation_rate_pct IS {}").format(staging, sql.Literal(
                     f"100 * tickets whose CURRENT status is one of {escalated} / tickets. A snapshot: tickets escalated "
@@ -282,7 +290,9 @@ def build_gold(run_id: uuid.UUID | str, schema: str = "gold", approved_path: Pat
             if dup := _duplicate_finding(conn, sql.Identifier(s_schema, s_table), roles["id"]):
                 findings.append(dup)
             _store_findings(conn, staging, findings)
-            silver_rows = conn.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(s_schema, f"{s_table}_valid"))).fetchone()[0]  # type: ignore[index]
+            silver_rows = conn.execute(
+                sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(s_schema, f"{s_table}_valid"))
+            ).fetchone()[0]  # type: ignore[index]
             checks = _checks(conn, staging, silver_rows)
             if not all(c["ok"] for c in checks.values()):
                 raise GoldError("reconciliation failed: " + "; ".join(f"{k} ({v['expected']} vs {v['actual']})"

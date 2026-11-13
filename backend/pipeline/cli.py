@@ -38,8 +38,9 @@ def _build_parser() -> argparse.ArgumentParser:
     context = sub.add_parser("context", help="store human business context, or draft it with one cheap LLM call")
     context.add_argument("--run-id", type=uuid.UUID)
     context.add_argument("--context-file", type=Path, help="human-written context (plain text or draft-shaped JSON)")
-    context.add_argument("--approve", action="store_true",
-                         help="approve an inferred context stored unapproved by an older version")
+    context.add_argument(
+        "--approve", action="store_true", help="approve an inferred context stored unapproved by an older version"
+    )
     context.add_argument("--redraft", action="store_true", help="draft the inferred context again (LLM call)")
     context.add_argument("--compare", action="store_true", help="show human vs inferred differences")
     card = sub.add_parser("card", help="render the dataset card within a token budget")
@@ -58,9 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--run-id", type=uuid.UUID)
     defaults = sub.add_parser("default-rules", help="write default rules for issue-free columns (YAML to stdout)")
     defaults.add_argument("--run-id", type=uuid.UUID)
-    for name, text in [("dq-run", "run the DQ agent until it pauses or ends"), ("dq-status", "agent thread status"),
-                       ("dq-approve", "approve the proposed rules (re-reads proposed.yaml)"),
-                       ("dq-reject", "reject the proposed rules")]:
+    for name, text in [
+        ("dq-run", "run the DQ agent until it pauses or ends"),
+        ("dq-status", "agent thread status"),
+        ("dq-approve", "approve the proposed rules (re-reads proposed.yaml)"),
+        ("dq-reject", "reject the proposed rules"),
+    ]:
         dq = sub.add_parser(name, help=text)
         dq.add_argument("--run-id", type=uuid.UUID)
         if name == "dq-run":
@@ -126,7 +130,9 @@ def format_funnel(run: dict[str, Any]) -> str:
 
 def format_runs(runs: list[dict[str, Any]]) -> str:
     """Render recent runs as one line each."""
-    header = f"{'started_at':<20} {'status':<9} {'records':>8} {'ok':>7} {'malf':>5} {'fail':>5} {'dup':>5}  run_id / file"
+    header = (
+        f"{'started_at':<20} {'status':<9} {'records':>8} {'ok':>7} {'malf':>5} {'fail':>5} {'dup':>5}  run_id / file"
+    )
     rows = [
         f"{r['started_at']:%Y-%m-%d %H:%M:%S} {r['status']:<9} {r['records_parsed'] or 0:>8} "
         f"{r['rows_loaded_ok'] or 0:>7} {r['rows_loaded_malformed'] or 0:>5} {r['load_failed'] or 0:>5} "
@@ -243,9 +249,11 @@ def main(argv: list[str] | None = None) -> int:
         from pipeline.silver.build import build_silver
 
         b = build_silver(args.run_id or latest_succeeded_run())
-        print(f"silver build {b['build_id']} -> {b['target_table']} ({b['duration_ms']} ms)\n"
-              f"  rows in {b['rows_in']}: kept {b['rows_kept']}, flagged {b['rows_flagged']}, "
-              f"rejected {b['rows_rejected']}, duplicate {b['rows_duplicate']}  reconciliation ✓")
+        print(
+            f"silver build {b['build_id']} -> {b['target_table']} ({b['duration_ms']} ms)\n"
+            f"  rows in {b['rows_in']}: kept {b['rows_kept']}, flagged {b['rows_flagged']}, "
+            f"rejected {b['rows_rejected']}, duplicate {b['rows_duplicate']}  reconciliation ✓"
+        )
     elif args.command == "demo":
         from pipeline.demo import DEMO_FILE, run_demo
 

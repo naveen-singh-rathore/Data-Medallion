@@ -102,12 +102,16 @@ def test_no_raw_values_from_person_or_high_cardinality_columns(profiled, live) -
 
 
 def test_summary_is_cut_at_a_sentence_end() -> None:
-    text = ("Each row is one work order. " + "Facility teams use it to plan staff and budget across many sites. " * 6).strip()
+    text = (
+        "Each row is one work order. " + "Facility teams use it to plan staff and budget across many sites. " * 6
+    ).strip()
     assert fit_summary(text, 10) == "Each row is one work order."
     assert fit_summary(" ".join(["word"] * 70) + ".", 60) is None
     stored = validate_draft(draft(summary=text), ["priority"])
     assert stored["summary"].endswith(".") and len(stored["summary"].split()) <= 60
-    assert stored["repairs"] == [f"summary cut from {len(text.split())} to {len(stored['summary'].split())} words at a sentence end"]
+    assert stored["repairs"] == [
+        f"summary cut from {len(text.split())} to {len(stored['summary'].split())} words at a sentence end"
+    ]
 
 
 def test_too_long_single_sentence_is_retried_once(profiled, live) -> None:
@@ -134,8 +138,10 @@ def test_human_and_inferred_are_kept_and_compared(profiled, live) -> None:
     ensure_context(run_id, client=FakeClient(draft(critical_columns=["priority", "cost"],
                                                    column_tags=[{"column": "priority", "tag": "priority"},
                                                                 {"column": "cost", "tag": "money"}])))  # fmt: skip
-    human = ("Facility work orders used for SLA reporting.\nDomain: facilities work orders\n"
-             "Critical columns: priority, created_at\nTags: priority=priority, cost=quantity")
+    human = (
+        "Facility work orders used for SLA reporting.\nDomain: facilities work orders\n"
+        "Critical columns: priority, created_at\nTags: priority=priority, cost=quantity"
+    )
     used = ensure_context(run_id, human, client=ExplodingClient())
     assert used["source"] == "human" and get_context(run_id)["source"] == "human"
     assert get_context(run_id, "inferred")["draft"]["domain"] == "support tickets"  # draft kept, not used

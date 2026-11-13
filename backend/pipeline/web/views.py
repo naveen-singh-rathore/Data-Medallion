@@ -137,7 +137,11 @@ def current_rules(run_id: uuid.UUID) -> tuple[SilverRules | None, str | None, Pa
     from pipeline.demo import bound_path  # approved rules bound to this run by the demo
 
     if bound_path(str(run_id)).exists():
-        return SilverRules.model_validate(from_yaml(bound_path(str(run_id)).read_text())), "approved", bound_path(str(run_id))
+        return (
+            SilverRules.model_validate(from_yaml(bound_path(str(run_id)).read_text())),
+            "approved",
+            bound_path(str(run_id)),
+        )
     path = proposed_path(str(run_id))
     if path.exists():
         try:
@@ -224,7 +228,9 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
     else:
         m = agent_metrics or {}
         agent_state = "done"
-        agent_summary = f"{m.get('turns', 0)} steps, {m.get('tool_calls', 0)} checks, ${float(m.get('cost_usd') or 0):.2f}"
+        agent_summary = (
+            f"{m.get('turns', 0)} steps, {m.get('tool_calls', 0)} checks, ${float(m.get('cost_usd') or 0):.2f}"
+        )
     stages.append(_stage("agent", "AI quality review", agent_state, agent_summary))
 
     if status == "awaiting_approval":
@@ -294,7 +300,9 @@ def bronze_view(run_id: uuid.UUID) -> dict[str, Any]:
             ORDER BY n DESC LIMIT 10""",
         (run_id,),
     )
-    accounted = (run.get("rows_loaded_ok") or 0) + (run.get("rows_loaded_malformed") or 0) + (run.get("load_failed") or 0)
+    accounted = (
+        (run.get("rows_loaded_ok") or 0) + (run.get("rows_loaded_malformed") or 0) + (run.get("load_failed") or 0)
+    )
     return jsonable({
         "run": {k: v for k, v in run.items() if k != "file_sha256"} | {"file_sha256": run.get("file_sha256"),
                                                                      "file": file_label(run.get("source_file", ""))},
@@ -314,7 +322,9 @@ def bronze_rows(run_id: uuid.UUID, status: str | None, offset: int, limit: int, 
         params["search"] = f"%{search}%"
     cond = sql.SQL(" AND ").join(where)
     with transaction() as conn, conn.cursor(row_factory=dict_row) as cur:
-        total = cur.execute(sql.SQL("SELECT count(*) AS n FROM bronze.records WHERE {}").format(cond), params).fetchone()
+        total = cur.execute(
+            sql.SQL("SELECT count(*) AS n FROM bronze.records WHERE {}").format(cond), params
+        ).fetchone()
         rows = cur.execute(sql.SQL(
             "SELECT bronze_id, source_line, batch_no, parse_status, parse_error, row_hash, raw_line, payload"
             " FROM bronze.records WHERE {} ORDER BY source_line LIMIT %(limit)s OFFSET %(offset)s").format(cond),
@@ -621,7 +631,9 @@ def silver_summary(run_id: uuid.UUID) -> dict[str, Any] | None:
     rows, rules = preview.rows, preview.rules
     status = Counter(_row_status(r) for r in rows)
     errors = Counter(e for r in rows for e in r["_errors"])
-    swapped = sum(any(f.startswith("swapped:") for fl in (r["_quality_flags"] or {}).values() for f in fl) for r in rows)
+    swapped = sum(
+        any(f.startswith("swapped:") for fl in (r["_quality_flags"] or {}).values() for f in fl) for r in rows
+    )
     declared = sum(bool(r.get("_duplicate_of")) for r in rows)
     types = {c.name: c.type for c in rules.columns}
     columns = []
@@ -672,7 +684,7 @@ def silver_rows(run_id: uuid.UUID, show: str, column: str | None, offset: int, l
         if show in ("rejected", "flagged", "duplicate") and status != show:
             continue
         picked.append((r, cells, status))
-    page = picked[max(offset, 0): max(offset, 0) + min(limit, 200)]
+    page = picked[max(offset, 0) : max(offset, 0) + min(limit, 200)]
     return jsonable({
         "total": len(picked), "columns": [{"name": c.name, "source": c.source} for c in rules],
         "rows": [{"bronze_id": r["bronze_id"], "source_line": r["__line"], "status": s, "errors": r["_errors"],

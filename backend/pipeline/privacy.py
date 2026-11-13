@@ -38,7 +38,9 @@ def context_tags(context: dict[str, Any] | None) -> dict[str, str]:
 
 def is_sensitive(profile: dict[str, Any], tags: dict[str, str]) -> bool:
     pii = profile["pii_hints"]
-    return tags.get(profile["column"]) in SENSITIVE_TAGS or bool(pii["email_share"] or pii["phone_share"] or pii["name_matches"])
+    return tags.get(profile["column"]) in SENSITIVE_TAGS or bool(
+        pii["email_share"] or pii["phone_share"] or pii["name_matches"]
+    )
 
 
 def is_label_like(profile: dict[str, Any]) -> bool:

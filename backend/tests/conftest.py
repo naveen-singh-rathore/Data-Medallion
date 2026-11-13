@@ -54,9 +54,7 @@ def records(conn: psycopg.Connection) -> Callable[[UUID], list[dict[str, Any]]]:
     """records(run_id) -> bronze.records rows for the run, ordered by source_line."""
 
     def _records(run_id: UUID) -> list[dict[str, Any]]:
-        return conn.execute(
-            "SELECT * FROM bronze.records WHERE run_id = %s ORDER BY source_line", (run_id,)
-        ).fetchall()
+        return conn.execute("SELECT * FROM bronze.records WHERE run_id = %s ORDER BY source_line", (run_id,)).fetchall()
 
     return _records
 

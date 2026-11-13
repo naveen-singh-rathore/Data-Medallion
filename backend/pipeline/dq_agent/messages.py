@@ -38,7 +38,7 @@ def summarize_result(tool: str, content: str) -> str:
         return f"error: {str(data.get('error'))[:90]}"
     result = data.get("result", data)
     parts = []
-    for key, value in (result.items() if isinstance(result, dict) else []):
+    for key, value in result.items() if isinstance(result, dict) else []:
         if isinstance(value, bool | int | float | str) and len(str(value)) <= 40:
             parts.append(f"{key}={value}")
         elif isinstance(value, list | dict):

@@ -31,7 +31,9 @@ from pipeline.silver.rules_schema import (
 )
 
 COMPILED_DIR = REPO_ROOT / "build" / "compiled"
-OUTPUT_COLUMNS = frozenset({"bronze_id", "row_hash", "_quality_flags", "_errors", "_rejected", "_dup_rank", "_duplicate_of"})
+OUTPUT_COLUMNS = frozenset(
+    {"bronze_id", "row_hash", "_quality_flags", "_errors", "_rejected", "_dup_rank", "_duplicate_of"}
+)
 LONG_TEXT_CHARS, LONG_TEXT_WORDS = 40, 4  # longer than this in a label column = text that leaked in (swapped_columns)
 FLAG_CHUNK = 40  # jsonb_build_object takes at most 100 arguments
 
@@ -126,7 +128,9 @@ def mapped_expr(rule: ColumnRule, value: sql.Composable) -> tuple[sql.Composable
         return value, sql.SQL("false")
     keys = mapping_keys(rule)
     key = sql.SQL("silver.norm_key({})").format(value)
-    whens = sql.SQL(" ").join(sql.SQL("WHEN {} THEN {}").format(sql.Literal(k), sql.Literal(t)) for k, t in keys.items())
+    whens = sql.SQL(" ").join(
+        sql.SQL("WHEN {} THEN {}").format(sql.Literal(k), sql.Literal(t)) for k, t in keys.items()
+    )
     unmapped = {"keep": value, "null": sql.SQL("NULL"), "invalid": sql.SQL("NULL")}[rule.unmapped_action]
     mapped = sql.SQL("CASE {} {} ELSE {} END").format(key, whens, unmapped)
     is_unmapped = sql.SQL("({} IS NOT NULL AND NOT coalesce({} = ANY({}), false))").format(
@@ -152,7 +156,9 @@ def typed_expr(rule: ColumnRule, value: sql.Composable) -> sql.Composable:
         if fmt is None:  # the validator rejects unknown ids; the compiler just refuses
             raise ValueError(f"unknown date format id {format_id!r}")
         pattern = pg_pattern(fmt, day_first=rule.day_month_order == "dmy")
-        attempts.append(sql.SQL("silver.try_ts({}, {}, {})").format(value, sql.Literal(fmt.regex.pattern), sql.Literal(pattern)))
+        attempts.append(
+            sql.SQL("silver.try_ts({}, {}, {})").format(value, sql.Literal(fmt.regex.pattern), sql.Literal(pattern))
+        )
     parsed = sql.SQL("coalesce({})").format(sql.SQL(", ").join(attempts)) if attempts else sql.SQL("NULL::timestamp")
     return sql.SQL("({})::date").format(parsed) if rule.type == "date" else parsed
 
@@ -182,19 +188,24 @@ def swap_condition(a: ColumnRule, b: ColumnRule) -> sql.Composable:
     long_text = sql.SQL("(length(btrim({ra})) > {c} OR coalesce(array_length(regexp_split_to_array(btrim({ra}), '[[:space:]]+'), 1), 0) > {w})").format(
         ra=ra, c=sql.Literal(LONG_TEXT_CHARS), w=sql.Literal(LONG_TEXT_WORDS))  # fmt: skip
     return sql.SQL("coalesce({} AND silver.norm_key(btrim({})) = ANY({}), false)").format(
-        long_text, rb, _text_array(sorted(mapping_keys(a))))
+        long_text, rb, _text_array(sorted(mapping_keys(a)))
+    )
 
 
 def junk_failure(check: RowCheck, rules: SilverRules) -> sql.Composable:
     """>= min_empty_share of the row's cells empty or placeholders, or the id fails the dominant pattern."""
     p = check.params
-    tokens = sorted({t.lower() for t in CFG.null_like_tokens} | {t.lower() for c in rules.columns for t in c.null_tokens})
+    tokens = sorted(
+        {t.lower() for t in CFG.null_like_tokens} | {t.lower() for c in rules.columns for t in c.null_tokens}
+    )
     cells = [sql.SQL("CASE WHEN silver.blank_to_null(btrim({r})) IS NULL OR lower(btrim({r})) = ANY({t})"
                      " OR btrim({r}) ~ '^[[:punct:]]+$' THEN 1 ELSE 0 END").format(r=_raw(c.source), t=_text_array(tokens))
              for c in rules.columns]  # fmt: skip
     share = sql.SQL("(({})::numeric / {} >= {})").format(sql.SQL(" + ").join(cells), sql.Literal(len(cells)),
                                                           sql.Literal(float(str(p["min_empty_share"]))))  # fmt: skip
-    bad_id = sql.SQL("({id} IS NOT NULL AND NOT {id} ~ {pat})").format(id=sql.Identifier(str(p["id"])), pat=sql.Literal(str(p["id_pattern"])))
+    bad_id = sql.SQL("({id} IS NOT NULL AND NOT {id} ~ {pat})").format(
+        id=sql.Identifier(str(p["id"])), pat=sql.Literal(str(p["id_pattern"]))
+    )
     return sql.SQL("coalesce({} OR {}, false)").format(share, bad_id)
 
 
@@ -293,11 +304,15 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
         drops = nulled_by_check.get(c.name, [])
         if drops:
             cond = sql.SQL(" OR ").join(_id(f"_chk{i}") for i in drops)
-            final_values.append(sql.SQL("CASE WHEN {} THEN NULL ELSE {} END AS {}").format(cond, _id(c.name), _id(c.name)))
+            final_values.append(
+                sql.SQL("CASE WHEN {} THEN NULL ELSE {} END AS {}").format(cond, _id(c.name), _id(c.name))
+            )
         else:
             final_values.append(_id(c.name))
     raw_cols = [c for c in cols if has_raw_column(c) or c.name in swapped_in]
-    raw_select = [sql.SQL("(payload ->> {}) AS {}").format(sql.Literal(c.source), _id(c.name, "_raw")) for c in raw_cols]
+    raw_select = [
+        sql.SQL("(payload ->> {}) AS {}").format(sql.Literal(c.source), _id(c.name, "_raw")) for c in raw_cols
+    ]
 
     def column_flags(c: ColumnRule) -> sql.Composable:
         nulled = [f"_chk{i}" for i in nulled_by_check.get(c.name, [])]
@@ -334,15 +349,26 @@ def compile_rules(rules: SilverRules, run_id: str, sample: int | None = None) ->
             (sql.SQL("CASE WHEN {} THEN {} END").format(_id(c.name, "__oor"), sql.Literal(f"{c.name}:out_of_range")), reject),
         ]  # fmt: skip
         if c.mapping and c.unmapped_action == "invalid":
-            found.append((sql.SQL("CASE WHEN {} THEN {} END").format(_id(c.name, "__unm"), sql.Literal(f"{c.name}:unmapped")), reject))
+            found.append(
+                (
+                    sql.SQL("CASE WHEN {} THEN {} END").format(_id(c.name, "__unm"), sql.Literal(f"{c.name}:unmapped")),
+                    reject,
+                )
+            )
         if c.required:
             found.append((sql.SQL("CASE WHEN {} IS NULL THEN {} END").format(_id(c.name), sql.Literal(f"{c.name}:required_missing")),
                           reject))  # fmt: skip
         return found
 
     errors = [e for c in cols for e in column_errors(c)]
-    errors += [(sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), sql.Literal(_check_label(ch))), ch.action == "reject")
-               for i, ch in enumerate(checks) if ch.action not in ("swap", "duplicate")]  # fmt: skip  (fixes, not errors)
+    errors += [
+        (
+            sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), sql.Literal(_check_label(ch))),
+            ch.action == "reject",
+        )
+        for i, ch in enumerate(checks)
+        if ch.action not in ("swap", "duplicate")
+    ]  # fmt: skip  (fixes, not errors)
     duplicate_of = (sql.SQL("coalesce({})").format(sql.SQL(", ").join(
         sql.SQL("CASE WHEN {} THEN {} END").format(_id(f"_chk{i}"), duplicate_of_expr(ch)) for i, ch in declared)) if declared
         else sql.SQL("NULL::text"))  # fmt: skip

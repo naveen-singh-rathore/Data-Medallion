@@ -348,9 +348,7 @@ def fit_to_budget(profile: dict[str, Any]) -> dict[str, Any]:
 # --- assembly ------------------------------------------------------------------
 
 
-def profile_column(
-    name: str, position: int, values: pd.Series, seed: int, reference_time: datetime
-) -> dict[str, Any]:
+def profile_column(name: str, position: int, values: pd.Series, seed: int, reference_time: datetime) -> dict[str, Any]:
     """All facts for one column. `values` holds raw strings, None where the key is absent."""
     present = values.dropna()
     stripped = present.str.strip()

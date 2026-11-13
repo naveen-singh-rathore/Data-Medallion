@@ -61,7 +61,9 @@ def test_statistical_spike_in_high_cardinality_column() -> None:
 
 
 def test_date_sentinels_invalid_and_implausibly_old_dates() -> None:
-    p = profile(["2024-03-01", "2024-03-02"] * 20 + ["1900-01-01", "0000-00-00", "9999-12-31", "1985-06-01", "2024-02-30"])
+    p = profile(
+        ["2024-03-01", "2024-03-02"] * 20 + ["1900-01-01", "0000-00-00", "9999-12-31", "1985-06-01", "2024-02-30"]
+    )
     assert {s["value"] for s in p["sentinels"]} == {"1900-01-01", "0000-00-00", "9999-12-31"}
     dates = p["dates"]
     assert (dates["invalid_dates"], dates["implausibly_old_count"], dates["future_count"]) == (1, 1, 0)
@@ -71,12 +73,20 @@ def test_date_sentinels_invalid_and_implausibly_old_dates() -> None:
 
 
 def test_normalization_variants() -> None:
-    assert len({normalization_key(v) for v in ["In-Progress", "in progress", "in_progress", "InProgress", "IN PROGRESS"]}) == 1
+    assert (
+        len({normalization_key(v) for v in ["In-Progress", "in progress", "in_progress", "InProgress", "IN PROGRESS"]})
+        == 1
+    )
     assert normalization_key("Café") == normalization_key("cafe")
     assert normalization_key("-999") != normalization_key("999")  # no letters: punctuation is kept
     p = profile(["In Progress"] * 5 + ["In-Progress", "in_progress", "InProgress", "High", "HIGH", " high"])
     groups = {g["key"]: g for g in p["variants"]["top_groups"]}
-    assert {m[0] for m in groups["inprogress"]["members"]} == {"In Progress", "In-Progress", "in_progress", "InProgress"}
+    assert {m[0] for m in groups["inprogress"]["members"]} == {
+        "In Progress",
+        "In-Progress",
+        "in_progress",
+        "InProgress",
+    }
     assert groups["high"]["casing_only"] and not groups["inprogress"]["casing_only"]
     assert (p["variants"]["groups"], p["variants"]["casing_only_groups"]) == (2, 1)
     assert "NORMALIZATION_VARIANTS" in codes(p)
@@ -188,6 +198,7 @@ def test_profiling_twice_is_identical_and_within_budget(upgraded) -> None:
 
 
 # --- generic ---------------------------------------------------------------------
+
 
 def test_pipeline_code_has_no_dataset_column_names() -> None:
     """No string literal anywhere in pipeline/ equals a column name of the real dataset."""

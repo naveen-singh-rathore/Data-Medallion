@@ -55,7 +55,9 @@ class ValidationReport:
 
     def feedback(self) -> str:
         """Compact, actionable text for the agent (<= 2 KB)."""
-        head = f"VALID ({self.layer} passed)" if self.ok else f"INVALID at layer {self.layer}: {len(self.errors)} error(s)"
+        head = (
+            f"VALID ({self.layer} passed)" if self.ok else f"INVALID at layer {self.layer}: {len(self.errors)} error(s)"
+        )
         lines = [head, *(f"ERROR {e}" for e in self.errors), *(f"WARN {w}" for w in self.warnings)]
         for name, s in self.stats.get("columns", {}).items():
             lines.append(f"STAT {name}: null {s['null_before']:.0%}->{s['null_after']:.0%} invalid {s['invalid']:.1%}"
@@ -88,7 +90,11 @@ def _path(loc: tuple[Any, ...], raw: dict[str, Any]) -> str:
     node: Any = raw
     for key in loc:
         if isinstance(key, int):
-            name = node[key].get("name") if isinstance(node, list) and key < len(node) and isinstance(node[key], dict) else None
+            name = (
+                node[key].get("name")
+                if isinstance(node, list) and key < len(node) and isinstance(node[key], dict)
+                else None
+            )
             parts[-1] += f"[{key}]" + (f" ({name})" if name else "")
         else:
             parts.append(str(key))
@@ -97,7 +103,9 @@ def _path(loc: tuple[Any, ...], raw: dict[str, Any]) -> str:
 
 
 def _has(node: Any, key: Any) -> bool:
-    return (isinstance(node, dict) and key in node) or (isinstance(node, list) and isinstance(key, int) and key < len(node))
+    return (isinstance(node, dict) and key in node) or (
+        isinstance(node, list) and isinstance(key, int) and key < len(node)
+    )
 
 
 def check_schema(raw: Any) -> tuple[SilverRules | None, list[str]]:
@@ -165,7 +173,12 @@ def _column_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
                     key = normalization_key(v)
                     if seen.setdefault(key, target) != target:
                         errors.append(f"{where}.mapping: {v!r} maps to both {seen[key]!r} and {target!r}")
-        if c.range and isinstance(c.range.min, int | float) and isinstance(c.range.max, int | float) and c.range.min > c.range.max:
+        if (
+            c.range
+            and isinstance(c.range.min, int | float)
+            and isinstance(c.range.max, int | float)
+            and c.range.min > c.range.max
+        ):
             errors.append(f"{where}.range: min > max")
     return errors
 
@@ -185,7 +198,9 @@ def _reference_semantics(rules: SilverRules, facts: RunFacts) -> list[str]:
         if check.kind == "swapped_columns" and all(c in types for c in cols):
             a = next(c for c in rules.columns if c.name == cols[0])
             if not a.mapping:
-                errors.append(f"row_checks[{i}] (swapped_columns): {cols[0]!r} needs a standard-value mapping to recognise its labels")
+                errors.append(
+                    f"row_checks[{i}] (swapped_columns): {cols[0]!r} needs a standard-value mapping to recognise its labels"
+                )
             if any(types[c] != "text" for c in cols):
                 errors.append(f"row_checks[{i}] (swapped_columns): both columns must be text")
         if check.kind == "date_order" and any(types.get(c) not in DATE_TYPES for c in cols if c in types):
@@ -254,7 +269,9 @@ def _stats(rules: SilverRules, rows: list[dict[str, Any]]) -> dict[str, Any]:
         before = sum(_blank(r["__payload"].get(c.source)) for r in rows)
         after = sum(r[c.name] is None for r in rows)
         flags = Counter(f for r in rows for f in ((r["_quality_flags"] or {}).get(c.name) or []))
-        invalid = sum(any(e.startswith(f"{c.name}:") and not e.endswith("required_missing") for e in r["_errors"]) for r in rows)
+        invalid = sum(
+            any(e.startswith(f"{c.name}:") and not e.endswith("required_missing") for e in r["_errors"]) for r in rows
+        )
         newly_null = sum(not _blank(r["__payload"].get(c.source)) and r[c.name] is None for r in rows)
         columns[c.name] = {
             "null_before": before / n, "null_after": after / n, "invalid": invalid / n,
@@ -281,9 +298,13 @@ def _stat_warnings(rules: SilverRules, stats: dict[str, Any]) -> list[str]:
         elif s["invalid"] > WARN_INVALID:
             warnings.append(f"{name}: {s['invalid']:.1%} of sampled values are invalid (> {WARN_INVALID:.0%})")
         if s["newly_null_share"] > WARN_NEWLY_NULL:
-            warnings.append(f"{name}: rules null {s['newly_null_share']:.0%} of previously non-null values (> {WARN_NEWLY_NULL:.0%})")
+            warnings.append(
+                f"{name}: rules null {s['newly_null_share']:.0%} of previously non-null values (> {WARN_NEWLY_NULL:.0%})"
+            )
     if stats.get("rows", {}).get("with_errors", 0) > WARN_ROWS_WITH_ERRORS:
-        warnings.append(f"rows: {stats['rows']['with_errors']:.1%} of sampled rows have errors (> {WARN_ROWS_WITH_ERRORS:.0%})")
+        warnings.append(
+            f"rows: {stats['rows']['with_errors']:.1%} of sampled rows have errors (> {WARN_ROWS_WITH_ERRORS:.0%})"
+        )
     asked = {i for q in rules.needs_human for i in q.issue_ids}
     for c in rules.columns:
         if c.confidence < WARN_CONFIDENCE and not (set(c.addresses) & asked):

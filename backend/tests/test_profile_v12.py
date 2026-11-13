@@ -31,7 +31,10 @@ def test_date_order_has_format_pairs_and_unambiguous_share(profiled) -> None:
     # K-02 (ISO with T on both sides) and K-05 (ISO vs ISO) violate; K-04 "03/04/2024" is ambiguous -> excluded
     assert (order["count"], order["compared"]) == (2, 21)
     assert (order["unambiguous_compared"], order["unambiguous_share"]) == (20, 0.1)
-    assert order["format_pairs"] == [["YYYY-MM-DD", "YYYY-MM-DD", 1, 18], ["YYYY-MM-DDTHH:MM:SS", "YYYY-MM-DDTHH:MM:SS", 1, 1]]
+    assert order["format_pairs"] == [
+        ["YYYY-MM-DD", "YYYY-MM-DD", 1, 18],
+        ["YYYY-MM-DDTHH:MM:SS", "YYYY-MM-DDTHH:MM:SS", 1, 1],
+    ]
 
 
 def test_duplicate_stats_reported_even_when_zero(profiled) -> None:
@@ -58,12 +61,21 @@ def test_every_issue_has_examples(profiled) -> None:
 
 
 def test_number_kinds_and_cleanup() -> None:
-    kinds = {k: (n, ex) for k, n, ex in number_kinds(["$40", "₹1,200", "45%", "1.234,56", "(40)", "3 hrs", "40 USD", "1e3"])}
+    kinds = {
+        k: (n, ex) for k, n, ex in number_kinds(["$40", "₹1,200", "45%", "1.234,56", "(40)", "3 hrs", "40 USD", "1e3"])
+    }
     assert {k: n for k, (n, _) in kinds.items()} == {
         "currency_prefix": 2, "thousands_separator": 1, "percent": 1, "european_decimal": 1,
         "parentheses_negative": 1, "unit_suffix": 1, "currency_suffix": 1, "scientific": 1}  # fmt: skip
     assert kinds["unit_suffix"][1] == "3 hrs"
-    assert [cleanup_number(v) for v in ["$1,067.53", "(40)", "€3,50", "45%", "3 hrs", "TBD"]] == [1067.53, -40, 3.5, 45, 3, None]
+    assert [cleanup_number(v) for v in ["$1,067.53", "(40)", "€3,50", "45%", "3 hrs", "TBD"]] == [
+        1067.53,
+        -40,
+        3.5,
+        45,
+        3,
+        None,
+    ]
     p = profile(["10", "12", "$40", "1,200", "45%", "error", "7", "8", "9", "11"])
     assert p["numeric"]["numeric_after_cleanup"] == 0.9
     assert [k[0] for k in p["numeric"]["number_kinds"]] == ["currency_prefix", "percent", "thousands_separator"]

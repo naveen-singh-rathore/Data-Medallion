@@ -103,7 +103,11 @@ def history_like_columns(data: RunData, profiles: list[Profile]) -> set[str]:
         tag = data.column_tags.get(p["column"])
         small_categorical = (p["cardinality"]["role_hint"] == "categorical"
                              and p["cardinality"]["distinct"] <= CFG.status_like_max_distinct)  # fmt: skip
-        if p["type_inference"]["dominant_type"] in ("date", "datetime") or tag in ("timestamp", "status") or small_categorical:
+        if (
+            p["type_inference"]["dominant_type"] in ("date", "datetime")
+            or tag in ("timestamp", "status")
+            or small_categorical
+        ):
             found.add(p["column"])
     return found
 
@@ -135,7 +139,10 @@ def key_with_repeats(data: RunData, profiles: list[Profile]) -> list[dict[str, A
     history = history_like_columns(data, profiles)
     findings = []
     for p in profiles:
-        if p["cardinality"]["distinct_ratio"] < CFG.key_ratio or p["type_inference"]["dominant_type"] in ("date", "datetime"):
+        if p["cardinality"]["distinct_ratio"] < CFG.key_ratio or p["type_inference"]["dominant_type"] in (
+            "date",
+            "datetime",
+        ):
             continue
         rows_by_value: dict[str, list[int]] = defaultdict(list)
         for i, value in enumerate(data.frame[p["column"]]):
@@ -273,7 +280,9 @@ def dataset_summary(data: RunData, profiles: list[Profile]) -> dict[str, Any]:
 # --- run + storage -----------------------------------------------------------
 
 
-def _store(conn: psycopg.Connection, run_id: uuid.UUID, profiles: list[Profile], summary: Profile, issues: list) -> None:
+def _store(
+    conn: psycopg.Connection, run_id: uuid.UUID, profiles: list[Profile], summary: Profile, issues: list
+) -> None:
     """Replace the run's profiles (same transaction, so re-profiling is idempotent)."""
     conn.execute("DELETE FROM meta.column_profiles WHERE run_id = %s", (run_id,))
     conn.execute("DELETE FROM meta.dataset_profiles WHERE run_id = %s", (run_id,))

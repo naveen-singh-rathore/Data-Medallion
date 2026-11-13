@@ -32,13 +32,11 @@ NUL_MARKER = "\\x00"  # Postgres text/jsonb cannot store NUL, so it becomes this
 CHUNK_SIZE = 1 << 20
 
 RECORD_COLUMNS = (
-    "run_id, source_file, source_line, raw_line, payload, row_hash,"
-    " parse_status, parse_error, batch_no, ingested_at"
+    "run_id, source_file, source_line, raw_line, payload, row_hash, parse_status, parse_error, batch_no, ingested_at"
 )
 COPY_RECORDS_SQL = f"COPY bronze.records ({RECORD_COLUMNS}) FROM STDIN"
 INSERT_RECORD_SQL = (
-    f"INSERT INTO bronze.records ({RECORD_COLUMNS})"
-    " VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)"
+    f"INSERT INTO bronze.records ({RECORD_COLUMNS}) VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)"
 )
 INSERT_LOAD_ERROR_SQL = """
     INSERT INTO bronze.load_errors (run_id, batch_no, source_line, raw_line, row_hash, error_message)
@@ -390,9 +388,7 @@ def find_run(file_sha256: str) -> tuple[uuid.UUID, str] | None:
         ).fetchone()  # type: ignore[return-value]
 
 
-def _open_run(
-    ctx: RunContext, sha: str, size: int, encoding: str, replaces: uuid.UUID | None
-) -> None:
+def _open_run(ctx: RunContext, sha: str, size: int, encoding: str, replaces: uuid.UUID | None) -> None:
     """Insert the 'running' row in its own committed transaction so failures stay recorded."""
     with transaction() as conn:
         if replaces:
@@ -407,9 +403,7 @@ def _open_run(
         )
 
 
-def finalize_run(
-    conn: psycopg.Connection, ctx: RunContext, funnel: Funnel, header: list[str]
-) -> None:
+def finalize_run(conn: psycopg.Connection, ctx: RunContext, funnel: Funnel, header: list[str]) -> None:
     """Mark the run succeeded with its funnel, in the same transaction as the data."""
     funnel.duplicate_hash_groups = _duplicate_hash_groups(conn, ctx.run_id)
     conn.execute(

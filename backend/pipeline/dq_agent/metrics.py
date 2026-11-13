@@ -52,6 +52,8 @@ def write_agent_run(state: dict[str, Any], status: str, **extra: Any) -> None:
 
 def latest_agent_run(run_id: str) -> dict[str, Any] | None:
     with transaction() as conn:
-        cur = conn.execute("SELECT * FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,))
+        cur = conn.execute(
+            "SELECT * FROM meta.agent_runs WHERE run_id = %s ORDER BY updated_at DESC LIMIT 1", (run_id,)
+        )
         row = cur.fetchone()
         return dict(zip([d.name for d in cur.description], row, strict=True)) if row else None  # type: ignore[union-attr]

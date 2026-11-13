@@ -72,7 +72,9 @@ def get_value_counts(view: RunView, args: ValueCountsArgs) -> dict[str, Any]:
         sql.SQL("silver.pattern_mask(btrim({}))").format(value)  # fmt: skip
     where = sql.SQL(OK_ROWS)
     if args.pattern_mask:
-        where = sql.SQL("{} AND silver.pattern_mask(btrim({})) = {}").format(where, value, sql.Literal(args.pattern_mask))
+        where = sql.SQL("{} AND silver.pattern_mask(btrim({})) = {}").format(
+            where, value, sql.Literal(args.pattern_mask)
+        )
     query = sql.SQL("SELECT {g} AS v, count(*) AS n, min(length({v})) AS lo, max(length({v})) AS hi FROM bronze.records"
                     " WHERE {w} GROUP BY 1 ORDER BY 2 DESC, 1 NULLS FIRST LIMIT {lim}").format(
         g=group, v=value, w=where, lim=sql.Literal(args.limit))  # fmt: skip
@@ -120,8 +122,12 @@ def check_regex(view: RunView, args: RegexArgs) -> dict[str, Any]:
     base = sql.SQL("FROM bronze.records WHERE {} AND coalesce({}, '') <> ''").format(sql.SQL(OK_ROWS), value)
     try:
         with get_ro_conn() as conn:
-            total, matched = conn.execute(sql.SQL("SELECT count(*), count(*) FILTER (WHERE {v} ~ {p}) {b}").format(
-                v=value, p=sql.Literal(args.pattern), b=base), {"run_id": view.run_id}).fetchone()  # type: ignore[misc]
+            total, matched = conn.execute(
+                sql.SQL("SELECT count(*), count(*) FILTER (WHERE {v} ~ {p}) {b}").format(
+                    v=value, p=sql.Literal(args.pattern), b=base
+                ),
+                {"run_id": view.run_id},
+            ).fetchone()  # type: ignore[misc]
             misses = conn.execute(sql.SQL("SELECT {v}, count(*) {b} AND NOT ({v} ~ {p}) GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 200").format(
                 v=value, p=sql.Literal(args.pattern), b=base), {"run_id": view.run_id}).fetchall()  # fmt: skip
     except Exception as exc:
@@ -170,7 +176,9 @@ def test_rule(view: RunView, args: TestRuleArgs) -> dict[str, Any]:
 
     blank = [r["__raw"] is None or not r["__raw"].strip() for r in rows]
     flags = Counter(f for r in rows for f in ((r["_quality_flags"] or {}).get(rule.name) or []))
-    failing = Counter((r["__raw"], e.split(":", 1)[1]) for r in rows for e in r["_errors"] if e.startswith(f"{rule.name}:"))
+    failing = Counter(
+        (r["__raw"], e.split(":", 1)[1]) for r in rows for e in r["_errors"] if e.startswith(f"{rule.name}:")
+    )
     return {
         "sampled": len(rows),
         "before_top": [[shown(v), c] for v, c in Counter(r["__raw"] for r in rows).most_common(5)],
@@ -216,13 +224,17 @@ def check_cross_column(view: RunView, args: CrossColumnArgs) -> dict[str, Any]:
         view.profile(r.source)
         _one_rule(view, r)
     compiled = compile_rules(SilverRules(source_run_id=view.run_id, generated_by="agent", columns=rules), view.run_id)
-    query = sql.SQL("SELECT b.source_line, c.x_0, c.x_1, c.x_0_raw, c.x_1_raw FROM ({}) c"
-                    " JOIN bronze.records b ON b.bronze_id = c.bronze_id ORDER BY b.source_line").format(compiled.query)
+    query = sql.SQL(
+        "SELECT b.source_line, c.x_0, c.x_1, c.x_0_raw, c.x_1_raw FROM ({}) c"
+        " JOIN bronze.records b ON b.bronze_id = c.bronze_id ORDER BY b.source_line"
+    ).format(compiled.query)
     with get_ro_conn() as conn:
         rows = conn.execute(query, compiled.params).fetchall()
     compared = [r for r in rows if r[1] and r[2]]
     later = [r for r in compared if r[1] > r[2]]
-    certain = [r for r in compared if not _is_ambiguous(r[3], args.a_formats) and not _is_ambiguous(r[4], args.b_formats)]
+    certain = [
+        r for r in compared if not _is_ambiguous(r[3], args.a_formats) and not _is_ambiguous(r[4], args.b_formats)
+    ]
     certain_later = [r for r in certain if r[1] > r[2]]
     pa, pb = view.profile(args.a), view.profile(args.b)
     return {

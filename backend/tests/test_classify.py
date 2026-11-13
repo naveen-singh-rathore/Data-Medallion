@@ -62,7 +62,9 @@ def built(ingest, conn, tmp_path):
 
 
 def test_names_are_scrubbed_but_generic_words_are_kept() -> None:
-    assert name_like("Jane Doe") and name_like("D. Kim") and not name_like("System") and not name_like("CityWide Electric")
+    assert (
+        name_like("Jane Doe") and name_like("D. Kim") and not name_like("System") and not name_like("CityWide Electric")
+    )
     assert not name_like("maintenance team") and not name_like("ABC Mechanical")
     text = scrub_text("Call Jane Doe at 555-123-4567 or jane@x.com; System says HVAC down", ["Jane Doe"])
     assert text == "Call [PERSON] at [PHONE] or [EMAIL]; System says HVAC down"
@@ -79,7 +81,12 @@ def test_targets_are_labelled_with_a_closed_list_and_never_overwrite_the_rule_va
     rows = {r["state_raw"] if "state_raw" in r else r["state"]: r for r in
             conn.execute(f"SELECT * FROM {TARGET} WHERE state_source <> 'rule'").fetchall()}  # fmt: skip
     sure, unsure = rows["In-Progress"], rows["in progress"]
-    assert (sure["state"], sure["state_ai"], float(sure["state_ai_confidence"]), sure["state_source"]) == ("In-Progress", "open", 0.9, "ai")
+    assert (sure["state"], sure["state_ai"], float(sure["state_ai_confidence"]), sure["state_source"]) == (
+        "In-Progress",
+        "open",
+        0.9,
+        "ai",
+    )
     assert (unsure["state_ai"], float(unsure["state_ai_confidence"]), unsure["state_source"]) == (None, 0.3, "none")
     assert "ai_labelled" in sure["_quality_flags"]["state"] and "ai_low_confidence" in unsure["_quality_flags"]["state"]
     sources = {r["state_source"]: r["n"] for r in
@@ -88,7 +95,9 @@ def test_targets_are_labelled_with_a_closed_list_and_never_overwrite_the_rule_va
 
     again = classify.classify_run(run_id, client=ExplodingClient(), approved_path=path)  # rerun: cache only
     assert (again["cache_hits"], again["llm_calls"], again["recovered"]) == (2, 0, 1)
-    flags = conn.execute(f"SELECT _quality_flags -> 'state' AS f FROM {TARGET} WHERE state_source = 'ai'").fetchone()["f"]
+    flags = conn.execute(f"SELECT _quality_flags -> 'state' AS f FROM {TARGET} WHERE state_source = 'ai'").fetchone()[
+        "f"
+    ]
     assert flags.count("ai_labelled") == 1  # idempotent
 
     build.build_silver(run_id, path)  # a rebuild keeps the AI columns
@@ -102,7 +111,9 @@ def test_eval_sheet_and_scoring(built, tmp_path) -> None:
     with sheet.open() as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 2 and all(r["text_shown_to_ai"].startswith("state: ") for r in rows)
-    assert "open" not in "".join(r["text_shown_to_ai"] + r["human_label"] for r in rows if "progress" not in r["text_shown_to_ai"].lower())
+    assert "open" not in "".join(
+        r["text_shown_to_ai"] + r["human_label"] for r in rows if "progress" not in r["text_shown_to_ai"].lower()
+    )
     for r in rows:
         r["human_label"] = "open"
     with sheet.open("w", newline="") as f:
@@ -110,4 +121,10 @@ def test_eval_sheet_and_scoring(built, tmp_path) -> None:
         w.writeheader()
         w.writerows(rows)
     result = classify.evaluate(sheet, run_id)
-    assert (result["labelled"], result["answered"], result["accuracy_all"], result["coverage"], result["accuracy_confident"]) == (2, 2, 1.0, 0.5, 1.0)
+    assert (
+        result["labelled"],
+        result["answered"],
+        result["accuracy_all"],
+        result["coverage"],
+        result["accuracy_confident"],
+    ) == (2, 2, 1.0, 0.5, 1.0)

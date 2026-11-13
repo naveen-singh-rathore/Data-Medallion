@@ -305,7 +305,9 @@ def compare_contexts(run_id: uuid.UUID) -> list[str]:
     """Human vs inferred: domain, critical columns and tag differences, as printable lines."""
     human, inferred = get_context(run_id, "human"), get_context(run_id, "inferred")
     if not human or not inferred:
-        return [f"need both contexts to compare (human: {'yes' if human else 'no'}, inferred: {'yes' if inferred else 'no'})"]
+        return [
+            f"need both contexts to compare (human: {'yes' if human else 'no'}, inferred: {'yes' if inferred else 'no'})"
+        ]
     h, i = human["draft"] or {}, inferred["draft"] or {}
     hc, ic = h.get("critical_columns", []), i.get("critical_columns", [])
     ht, it = h.get("column_tags", {}), i.get("column_tags", {})

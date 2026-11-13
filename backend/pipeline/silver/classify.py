@@ -105,7 +105,9 @@ def _rows(run_id: str, rules: SilverRules, rule: ColumnRule, tags: dict[str, str
     with transaction() as conn:
         rows = conn.cursor(row_factory=dict_row).execute(query).fetchall()
     for r in rows:
-        r["parts"] = [(rule.source, r["payload"].get(rule.source) or "")] + [(f, r["payload"].get(f) or "") for f in free]
+        r["parts"] = [(rule.source, r["payload"].get(rule.source) or "")] + [
+            (f, r["payload"].get(f) or "") for f in free
+        ]
     return rows
 
 
@@ -198,7 +200,9 @@ def apply_ai_labels(conn: Any, table: sql.Composable, run_id: str, rules: Silver
     """Add/refresh <col>_ai, <col>_ai_confidence, <col>_source on `table` from silver.ai_labels.
     Used after classification (live table) and by every silver build (staging table)."""
     done = []
-    for (name,) in conn.execute("SELECT DISTINCT column_name FROM silver.ai_labels WHERE run_id = %s", (run_id,)).fetchall():
+    for (name,) in conn.execute(
+        "SELECT DISTINCT column_name FROM silver.ai_labels WHERE run_id = %s", (run_id,)
+    ).fetchall():
         rule = next((c for c in rules.columns if c.name == name and c.mapping), None)
         if rule is None:
             continue
@@ -234,7 +238,9 @@ def _refresh_live_table(run_id: str, rules: SilverRules) -> None:
     with transaction() as conn:
         conn.execute(sql.SQL("DROP VIEW IF EXISTS {}").format(valid))  # SELECT * views fix their columns
         apply_ai_labels(conn, table, run_id, rules)
-        conn.execute(sql.SQL("CREATE VIEW {} AS SELECT * FROM {} WHERE _status IN ('kept', 'flagged')").format(valid, table))
+        conn.execute(
+            sql.SQL("CREATE VIEW {} AS SELECT * FROM {} WHERE _status IN ('kept', 'flagged')").format(valid, table)
+        )
         conn.execute(sql.SQL("GRANT SELECT ON {} TO pipeline_ro").format(valid))
 
 

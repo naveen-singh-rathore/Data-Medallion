@@ -71,22 +71,53 @@ def test_metric_contracts_match_hand_computed_answers(gold_run, conn) -> None:
     fact = {r["ticket_id"]: r for r in rows(conn, "SELECT * FROM G.fact_tickets")}
     assert len(fact) == 8 and str(fact["T1"]["silver_build_id"]) == str(silver.latest_build(run_id)["build_id"])
     assert {t: r["exclusion_reason"] for t, r in fact.items() if r["exclusion_reason"]} == {
-        "T3": "not_resolved", "T5": "not_resolved", "T4": "resolved_before_created", "T7": "missing_created_at"}
-    assert fact["T7"]["category"] == "it_network" and fact["T2"]["category"] == "hvac" and fact["T1"]["category_source"] == "rule"
-    assert (fact["T2"]["resolution_hours"], fact["T2"]["sla_met"], fact["T1"]["sla_met"], fact["T6"]["sla_met"]) == (48, False, True, None)
+        "T3": "not_resolved",
+        "T5": "not_resolved",
+        "T4": "resolved_before_created",
+        "T7": "missing_created_at",
+    }
+    assert (
+        fact["T7"]["category"] == "it_network"
+        and fact["T2"]["category"] == "hvac"
+        and fact["T1"]["category_source"] == "rule"
+    )
+    assert (fact["T2"]["resolution_hours"], fact["T2"]["sla_met"], fact["T1"]["sla_met"], fact["T6"]["sla_met"]) == (
+        48,
+        False,
+        True,
+        None,
+    )
     assert fact["T4"]["sla_met"] is None and fact["T4"]["resolution_hours"] < 0  # negative duration kept, never used
 
     sla = {(str(r["month"])[:7] if r["month"] else None, r["priority"], r["category"]): r
            for r in rows(conn, "SELECT * FROM G.resolution_sla")}  # fmt: skip
     jan = sla[("2024-01", "high", "hvac")]
-    assert (jan["tickets"], jan["resolved"], jan["usable"], jan["excluded_count"], jan["coverage_pct"]) == (3, 3, 3, 0, Decimal("100.0"))
-    assert (jan["median_resolution_hours"], jan["avg_resolution_hours"], jan["p90_resolution_hours"]) == (Decimal("20.00"), Decimal("26.00"), Decimal("42.40"))
-    assert (jan["sla_measured"], jan["sla_met_rate_pct"], jan["escalation_rate_pct"]) == (3, Decimal("66.7"), Decimal("0.0"))
+    assert (jan["tickets"], jan["resolved"], jan["usable"], jan["excluded_count"], jan["coverage_pct"]) == (
+        3,
+        3,
+        3,
+        0,
+        Decimal("100.0"),
+    )
+    assert (jan["median_resolution_hours"], jan["avg_resolution_hours"], jan["p90_resolution_hours"]) == (
+        Decimal("20.00"),
+        Decimal("26.00"),
+        Decimal("42.40"),
+    )
+    assert (jan["sla_measured"], jan["sla_met_rate_pct"], jan["escalation_rate_pct"]) == (
+        3,
+        Decimal("66.7"),
+        Decimal("0.0"),
+    )
     feb_low = sla[("2024-02", "low", "plumbing")]
     assert (feb_low["tickets"], feb_low["usable"], feb_low["median_resolution_hours"], feb_low["sla_met_rate_pct"],
             feb_low["escalation_rate_pct"]) == (2, 1, Decimal("6.00"), None, Decimal("50.0"))  # fmt: skip
     feb_high = sla[("2024-02", "high", "plumbing")]
-    assert (feb_high["excluded_count"], feb_high["coverage_pct"], feb_high["median_resolution_hours"]) == (1, Decimal("0.0"), None)
+    assert (feb_high["excluded_count"], feb_high["coverage_pct"], feb_high["median_resolution_hours"]) == (
+        1,
+        Decimal("0.0"),
+        None,
+    )
     assert sla[(None, "high", "it_network")]["excluded_count"] == 1
 
     vol = {(str(r["month"])[:7] if r["month"] else None, r["category"], r["building"]): r
@@ -101,9 +132,18 @@ def test_metric_contracts_match_hand_computed_answers(gold_run, conn) -> None:
 
     cost = {(r["category"], r["building"]): r for r in rows(conn, "SELECT * FROM G.cost_summary")}
     h1 = cost[("hvac", "B1")]
-    assert (h1["tickets"], h1["tickets_with_cost"], h1["total_cost"], h1["avg_cost"], h1["median_cost"], h1["cost_coverage_pct"]) == (
-        3, 3, Decimal(600), Decimal("200.00"), Decimal("200.00"), Decimal("100.0"))
-    assert (cost[("plumbing", "B2")]["total_cost"], cost[("plumbing", "B2")]["cost_coverage_pct"]) == (Decimal(25), Decimal("50.0"))
+    assert (
+        h1["tickets"],
+        h1["tickets_with_cost"],
+        h1["total_cost"],
+        h1["avg_cost"],
+        h1["median_cost"],
+        h1["cost_coverage_pct"],
+    ) == (3, 3, Decimal(600), Decimal("200.00"), Decimal("200.00"), Decimal("100.0"))
+    assert (cost[("plumbing", "B2")]["total_cost"], cost[("plumbing", "B2")]["cost_coverage_pct"]) == (
+        Decimal(25),
+        Decimal("50.0"),
+    )
     assert (cost[("hvac", "B2")]["total_cost"], cost[("hvac", "B2")]["avg_cost"]) == (Decimal(0), None)
 
     findings = {r["finding"]: r for r in rows(conn, "SELECT * FROM G.data_quality_findings")}
@@ -117,20 +157,28 @@ def test_failed_build_leaves_previous_gold_untouched_and_rebuild_is_identical(go
     before = rows(conn, "SELECT ticket_id, category, resolution_hours, sla_met FROM G.fact_tickets ORDER BY ticket_id")
     second = gold.build_gold(run_id, SCHEMA, approved_path=path)
     assert second["build_id"] != first["build_id"] and second["row_counts"] == first["row_counts"]
-    assert rows(conn, "SELECT ticket_id, category, resolution_hours, sla_met FROM G.fact_tickets ORDER BY ticket_id") == before
+    assert (
+        rows(conn, "SELECT ticket_id, category, resolution_hours, sla_met FROM G.fact_tickets ORDER BY ticket_id")
+        == before
+    )
 
     real = gold._checks
     monkeypatch.setattr(gold, "_checks", lambda c, s, n: real(c, s, n + 1))  # silver count off by one
     with pytest.raises(gold.GoldError, match="reconciliation failed: fact_rows = silver valid rows"):
         gold.build_gold(run_id, SCHEMA, approved_path=path)
     assert gold.latest_gold(run_id)["status"] == "failed"
-    assert rows(conn, "SELECT ticket_id, category, resolution_hours, sla_met FROM G.fact_tickets ORDER BY ticket_id") == before
+    assert (
+        rows(conn, "SELECT ticket_id, category, resolution_hours, sla_met FROM G.fact_tickets ORDER BY ticket_id")
+        == before
+    )
     assert conn.execute(f"SELECT to_regclass('{SCHEMA}_staging.fact_tickets') AS t").fetchone()["t"] is None
 
 
 def test_gold_needs_a_current_silver_build(gold_run, tmp_path) -> None:
     run_id, path = gold_run
-    stale = path.read_text().replace("why: Needed for the gold metrics in this test.", "why: Needed for the gold metrics, edited.", 1)
+    stale = path.read_text().replace(
+        "why: Needed for the gold metrics in this test.", "why: Needed for the gold metrics, edited.", 1
+    )
     edited = tmp_path / "edited.yaml"
     edited.write_text(stale)
     with pytest.raises(gold.GoldError, match="no current silver build"):
@@ -146,4 +194,7 @@ def test_values_outside_a_standard_list_are_unknown_in_gold(gold_run, conn) -> N
     gold.build_gold(run_id, SCHEMA, approved_path=path)
     prio = {r["ticket_id"]: r["priority"] for r in rows(conn, "SELECT ticket_id, priority FROM G.fact_tickets")}
     assert prio["T1"] == "high" and prio["T3"] is None  # 'low' is not in the approved list
-    assert {r["priority"] for r in rows(conn, "SELECT DISTINCT priority FROM G.resolution_sla")} == {"high", "(unknown)"}
+    assert {r["priority"] for r in rows(conn, "SELECT DISTINCT priority FROM G.resolution_sla")} == {
+        "high",
+        "(unknown)",
+    }

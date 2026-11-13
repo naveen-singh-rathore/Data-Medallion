@@ -39,8 +39,15 @@ EVIDENCE_CHARS = 80
 POINTER_NAMES = 3
 EXACT_ATTEMPTS = 3
 # Short forms on the card (the legend line explains them); full names stay in the profile JSON.
-EVIDENCE_KEYS = {"examples": "ex", "count": "n", "share": "sh", "compared": "of", "punctuation_only": "punct",
-                 "unambiguous_share": "unambig_sh", "unambiguous_compared": "unambig_of"}
+EVIDENCE_KEYS = {
+    "examples": "ex",
+    "count": "n",
+    "share": "sh",
+    "compared": "of",
+    "punctuation_only": "punct",
+    "unambiguous_share": "unambig_sh",
+    "unambiguous_compared": "unambig_of",
+}
 TAG_CODES = {"id": "id", "timestamp": "ts", "category": "cat", "status": "st", "priority": "pri", "money": "$",
              "quantity": "qty", "duration": "dur", "free_text": "txt", "person": "per", "contact_pii": "pii",
              "location": "loc", "other": "oth"}  # fmt: skip
@@ -141,13 +148,19 @@ def header_lines(inputs: CardInputs) -> list[str]:
     partial = s.get("partial_rows", {}).get("count", 0)
     prof = inputs.profiler or {}
     return [
-        (f"# Dataset card: {inputs.source_file.rsplit('/', 1)[-1]} | run {inputs.run_id[:8]}"
-        f" | profiler {prof.get('version', '?')} config {prof.get('config_hash', '?')}"),
-        (f"Rows: {s['rows_ok']} ok, {s['rows_malformed']} malformed | dups: {s['exact_duplicate_rows']} exact,"
-        f" {s['near_duplicate_rows']} near | {partial} partial | {s['columns']} cols | {len(inputs.issues)} issues"),
+        (
+            f"# Dataset card: {inputs.source_file.rsplit('/', 1)[-1]} | run {inputs.run_id[:8]}"
+            f" | profiler {prof.get('version', '?')} config {prof.get('config_hash', '?')}"
+        ),
+        (
+            f"Rows: {s['rows_ok']} ok, {s['rows_malformed']} malformed | dups: {s['exact_duplicate_rows']} exact,"
+            f" {s['near_duplicate_rows']} near | {partial} partial | {s['columns']} cols | {len(inputs.issues)} issues"
+        ),
         "Tools: get_column_profile(name), list_issues(severity). Values in <> are masked patterns (A=letters, 9=digits).",
-        ("Columns: name | type(@conf if <100%) | missing | distinct | role | #tag | issues. Issue codes are short"
-         " forms; issue ids are <code>:<column>. Evidence: n=count, sh=share, of=compared, ex=examples"),
+        (
+            "Columns: name | type(@conf if <100%) | missing | distinct | role | #tag | issues. Issue codes are short"
+            " forms; issue ids are <code>:<column>. Evidence: n=count, sh=share, of=compared, ex=examples"
+        ),
     ]
 
 
@@ -170,7 +183,9 @@ def column_pointer(kind: str) -> Callable[[list[Any]], str]:
 def issue_pointer(severity: str) -> Callable[[list[Any]], str]:
     def pointer(rest: list[Any]) -> str:
         columns = {c for issue in rest for c in _issue_columns(issue)}
-        return f"- {len(rest)} more {severity} issues across {len(columns)} columns → list_issues(severity='{severity}')"
+        return (
+            f"- {len(rest)} more {severity} issues across {len(columns)} columns → list_issues(severity='{severity}')"
+        )
 
     return pointer
 

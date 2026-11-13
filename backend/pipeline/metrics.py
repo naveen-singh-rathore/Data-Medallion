@@ -24,8 +24,11 @@ def run_metrics(run_id: uuid.UUID) -> list[tuple[str, str]]:
     ]
     card = latest_card(run_id)
     if card:
-        exact = (f", exact {card['exact_tokens']:,} ({card['chars_per_token']} chars/token)" if card["exact_tokens"]
-                 else " (exact: run `card --exact`)")
+        exact = (
+            f", exact {card['exact_tokens']:,} ({card['chars_per_token']} chars/token)"
+            if card["exact_tokens"]
+            else " (exact: run `card --exact`)"
+        )
         rows += [
             ("card tokens", (f"~{card['est_tokens']:,} est.{exact} | budget {card['budget_tokens']:,}"
              f"{' | OVER BUDGET' if card['over_budget'] else ''}")),

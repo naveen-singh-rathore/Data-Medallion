@@ -59,7 +59,11 @@ def test_rebuild_replaces_the_table_and_a_failed_build_leaves_it_untouched(appro
     run_id, path, rules = approved
     first = build.build_silver(run_id, path)
     second = build.build_silver(run_id, path)
-    assert second["build_id"] != first["build_id"] and build.is_current(second, rules) and not build.is_current(first, rules)
+    assert (
+        second["build_id"] != first["build_id"]
+        and build.is_current(second, rules)
+        and not build.is_current(first, rules)
+    )
     monkeypatch.setattr(build, "STATUS_SQL", "'surprise'")  # every row gets an unknown status -> reconciliation fails
     with pytest.raises(build.BuildError, match="reconciliation failed"):
         build.build_silver(run_id, path)

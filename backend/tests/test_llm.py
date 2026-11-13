@@ -24,7 +24,9 @@ def version(conn):
 def test_request_hash_is_stable_and_canonical() -> None:
     schema_a = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
     schema_b = {"required": ["a"], "properties": {"a": {"type": "string"}}, "type": "object"}
-    assert request_hash("m", "v1", MESSAGES, json_schema=schema_a) == request_hash("m", "v1", MESSAGES, json_schema=schema_b)
+    assert request_hash("m", "v1", MESSAGES, json_schema=schema_a) == request_hash(
+        "m", "v1", MESSAGES, json_schema=schema_b
+    )
     assert request_hash("m", "v1", MESSAGES) != request_hash("m", "v2", MESSAGES)
     assert request_hash("m", "v1", MESSAGES) != request_hash("other", "v1", MESSAGES)
     assert len(request_hash("m", "v1", MESSAGES)) == 64
@@ -40,7 +42,9 @@ def test_cost_is_computed_from_usage() -> None:
 def test_live_calls_once_then_serves_from_cache(conn, version) -> None:
     client = FakeClient({"answer": 42})
     schema = {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]}
-    first = call_llm("test", "claude-haiku-5-5", MESSAGES, version, None, json_schema=schema, mode="live", client=client)
+    first = call_llm(
+        "test", "claude-haiku-5-5", MESSAGES, version, None, json_schema=schema, mode="live", client=client
+    )
     assert (first.data, first.cache_hit, first.cost_usd) == ({"answer": 42}, False, Decimal("0.0002"))
     sent = client.messages.calls[0]
     assert sent["output_config"]["format"] == {"type": "json_schema", "schema": schema}

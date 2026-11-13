@@ -281,7 +281,9 @@ def build_graph(checkpointer: Any = None, client: Any = None, mode: str | None =
         })  # fmt: skip
         if (decision or {}).get("action") == "reject":
             update = {"status": "rejected", "approval_errors": None}
-            metrics.write_agent_run({**state, **update}, "rejected", warnings=[f"rejected: {decision.get('reason', '')}"])
+            metrics.write_agent_run(
+                {**state, **update}, "rejected", warnings=[f"rejected: {decision.get('reason', '')}"]
+            )
             return update
         edited, errors = _load_edited(path, state)
         if errors:
@@ -357,4 +359,3 @@ def initial_state(run_id: str, thread_id: str) -> State:
     return State(run_id=run_id, thread_id=thread_id, messages=[], attempts=0, tool_calls=0, tool_calls_by_name={},
                  turns=0, input_tokens=0, output_tokens=0, cached_tokens=0, cost_usd=0.0, forced=False,
                  status="running", started_at=datetime.now(UTC).isoformat())  # fmt: skip
-

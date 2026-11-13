@@ -58,7 +58,9 @@ def test_coverage_lists_exactly_the_unaddressed_ids(silver_run) -> None:
     raw["addressed_issues"] = raw["addressed_issues"][2:]
     report = validate_rules(raw, silver_run)
     assert (report.ok, report.layer) == (False, "coverage")
-    assert report.errors == [f"coverage: 2 high/medium issue(s) not in addressed_issues: {[d['issue_id'] for d in dropped]}"]
+    assert report.errors == [
+        f"coverage: 2 high/medium issue(s) not in addressed_issues: {[d['issue_id'] for d in dropped]}"
+    ]
     assert validate_rules(covered(silver_run), silver_run).ok
 
 
@@ -102,11 +104,15 @@ def test_default_rules_cover_only_issue_free_columns(silver_run) -> None:
     defaults = default_rules(silver_run)
     flagged = flagged_columns(load_profile(silver_run)["issues"])
     assert {c.source for c in defaults.columns}.isdisjoint(flagged)
-    assert defaults.generated_by == "default" and all(c.steps == ["trim", "remove_hidden_chars"] for c in defaults.columns)
+    assert defaults.generated_by == "default" and all(
+        c.steps == ["trim", "remove_hidden_chars"] for c in defaults.columns
+    )
     agent = SilverRules.model_validate(small_rules(silver_run) | {"generated_by": "agent"})
     merged = merge_rules(defaults, agent)
     assert merged.generated_by == "agent"
-    assert {c.source for c in merged.columns} == {c.source for c in defaults.columns} | {c.source for c in agent.columns}
+    assert {c.source for c in merged.columns} == {c.source for c in defaults.columns} | {
+        c.source for c in agent.columns
+    }
     assert next(c for c in merged.columns if c.source == "amount").sentinels == ["999"]  # agent rule wins
 
 
@@ -126,7 +132,14 @@ def test_two_percent_unparseable_always_warns_even_when_diluted_by_empty_values(
     rules = SilverRules.model_validate({"source_run_id": "0" * 8 + "-0000-0000-0000-" + "0" * 12, "generated_by": "agent",
                                         "columns": [{"name": "created_at", "source": "created_at", "type": "text",
                                                      "confidence": 0.9, "why": "x" * 20}]})  # fmt: skip
-    base = {"null_before": 0.5, "null_after": 0.52, "newly_null_share": 0.04, "sentinel_hits": 0, "mapped": 0, "unmapped": 0}
+    base = {
+        "null_before": 0.5,
+        "null_after": 0.52,
+        "newly_null_share": 0.04,
+        "sentinel_hits": 0,
+        "mapped": 0,
+        "unmapped": 0,
+    }
     warned = _stat_warnings(rules, {"columns": {"created_at": base | {"invalid": 0.019, "unparseable_share": 0.038}}})
     assert any("created_at: 3.8% of non-empty sampled values can't be read" in w for w in warned)
     quiet = _stat_warnings(rules, {"columns": {"created_at": base | {"invalid": 0.009, "unparseable_share": 0.019}}})

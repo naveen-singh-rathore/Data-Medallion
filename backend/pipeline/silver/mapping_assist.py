@@ -40,6 +40,8 @@ LABEL_MAX_CHARS, LABEL_MAX_WORDS = 40, 4  # longer values are free text that lea
 
 def label_like(value: str) -> bool:
     return len(value) <= LABEL_MAX_CHARS and len(value.split()) <= LABEL_MAX_WORDS
+
+
 SYSTEM = (
     "You finish value mappings for a data-cleaning rule. Each column has a list of standard values, each "
     "with spellings already merged into it. Some values in the data are not in the list yet. For EVERY "

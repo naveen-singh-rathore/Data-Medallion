@@ -67,7 +67,12 @@ def test_tool_loop_then_pause_at_approval(dq_run, conn) -> None:
     second_request = client.messages.calls[1]["messages"]
     assert [b["type"] for b in second_request[-1]["content"]] == ["tool_result", "tool_result"]
     row = conn.execute("SELECT * FROM meta.agent_runs WHERE thread_id = %s", (result["thread_id"],)).fetchone()
-    assert (row["status"], row["turns"], row["tool_calls"], row["validation_attempts"]) == ("awaiting_approval", 2, 2, 0)
+    assert (row["status"], row["turns"], row["tool_calls"], row["validation_attempts"]) == (
+        "awaiting_approval",
+        2,
+        2,
+        0,
+    )
     assert row["tool_calls_by_name"] == {"list_issues": 1, "get_value_counts": 1}
     amount_ids = [i for i in required_ids(dq_run) if i.endswith(":amount")]
     assert row["issues_total"] == len(required_ids(dq_run)) and row["issues_addressed"] == len(amount_ids) > 0
@@ -101,7 +106,10 @@ def test_validation_feedback_lists_missing_ids_then_passes(dq_run) -> None:
 
 
 def test_three_failed_attempts_end_as_failed(dq_run, conn, tmp_path) -> None:
-    bad = [tool_call("submit_rules", {"source_run_id": dq_run, "generated_by": "agent", "columns": []}, n) for n in range(3)]
+    bad = [
+        tool_call("submit_rules", {"source_run_id": dq_run, "generated_by": "agent", "columns": []}, n)
+        for n in range(3)
+    ]
     result, _ = run_script(dq_run, [[b] for b in bad])
     assert (result["status"], result["attempts"], result["next"]) == ("failed", 3, [])
     report = json.loads((tmp_path / "rules" / dq_run / "validation.json").read_text())

@@ -71,7 +71,9 @@ def test_budget_respected_and_coverage_holds(budget: int) -> None:
     assert estimate_tokens(card.text) == card.metrics["est_tokens"] <= budget
     assert_full_coverage(inputs, card.text)
     m = card.metrics
-    assert m["columns_shown"] + m["compressed_counts"]["flagged_columns"] + m["compressed_counts"]["clean_columns"] == 40
+    assert (
+        m["columns_shown"] + m["compressed_counts"]["flagged_columns"] + m["compressed_counts"]["clean_columns"] == 40
+    )
     assert m["issues_shown"] + m["compressed_counts"]["medium_issues"] + m["compressed_counts"]["low_issues"] == 60
 
 
@@ -108,13 +110,19 @@ def test_run_all_ingests_profiles_adds_context_and_renders_card(ingest, conn, tm
     run_id = ingest("profile_messy.csv")  # registers the fixture for cleanup; run-all reloads it
     context_file = tmp_path / "context.txt"
     context_file.write_text("Facility tickets used for SLA reporting.")
-    path = str(conn.execute("SELECT source_file FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)).fetchone()["source_file"])
+    path = str(
+        conn.execute("SELECT source_file FROM meta.ingestion_runs WHERE run_id = %s", (run_id,)).fetchone()[
+            "source_file"
+        ]
+    )
     assert cli.main(["run-all", path, "--force", "--context-file", str(context_file)]) == 0
     latest = conn.execute("SELECT run_id FROM meta.ingestion_runs WHERE source_file = %s ORDER BY started_at DESC LIMIT 1",
                           (path,)).fetchone()["run_id"]  # fmt: skip
     context = conn.execute("SELECT source, approved FROM meta.dataset_context WHERE run_id = %s", (latest,)).fetchone()
     assert (context["source"], context["approved"]) == ("human", True)
-    assert conn.execute("SELECT count(*) AS n FROM meta.dataset_cards WHERE run_id = %s", (latest,)).fetchone()["n"] == 1
+    assert (
+        conn.execute("SELECT count(*) AS n FROM meta.dataset_cards WHERE run_id = %s", (latest,)).fetchone()["n"] == 1
+    )
     assert "Context (human):" in capsys.readouterr().out
 
 

@@ -75,7 +75,9 @@ def _column_stats(conn: Any, table: sql.Composable, rules: SilverRules) -> dict[
     """Per column: rows a rule changed (any quality flag except 'unmapped') and null counts."""
     parts = []
     for c in rules.columns:
-        changed = sql.SQL("count(*) FILTER (WHERE jsonb_path_exists(_quality_flags -> {}, '$[*] ? (@ != \"unmapped\")'))")
+        changed = sql.SQL(
+            "count(*) FILTER (WHERE jsonb_path_exists(_quality_flags -> {}, '$[*] ? (@ != \"unmapped\")'))"
+        )
         parts.append(sql.SQL("{} AS {}, count(*) FILTER (WHERE {} IS NULL) AS {}").format(
             changed.format(sql.Literal(c.name)), sql.Identifier(f"{c.name}__changed"),
             sql.Identifier(c.name), sql.Identifier(f"{c.name}__null")))  # fmt: skip
@@ -118,7 +120,9 @@ def build_silver(run_id: uuid.UUID | str, approved_path: Path | None = None) -> 
             )
 
             apply_ai_labels(conn, staging, run_id, rules)
-            counts = dict(conn.execute(sql.SQL("SELECT _status, count(*) FROM {} GROUP BY _status").format(staging)).fetchall())
+            counts = dict(
+                conn.execute(sql.SQL("SELECT _status, count(*) FROM {} GROUP BY _status").format(staging)).fetchall()
+            )
             rows_in = conn.execute("SELECT count(*) FROM bronze.records WHERE run_id = %s AND parse_status = 'ok'",
                                    (run_id,)).fetchone()[0]  # type: ignore[index]  # fmt: skip
             accounted = sum(counts.get(s, 0) for s in STATUSES)
@@ -130,11 +134,17 @@ def build_silver(run_id: uuid.UUID | str, approved_path: Path | None = None) -> 
             conn.execute(sql.SQL("ALTER TABLE {} RENAME TO {}").format(staging, sql.Identifier(table)))
             conn.execute(sql.SQL("ALTER TABLE {} ADD PRIMARY KEY (bronze_id)").format(target))
             conn.execute(sql.SQL("CREATE INDEX ON {} (_status)").format(target))
-            conn.execute(sql.SQL("CREATE VIEW {} AS SELECT * FROM {} WHERE _status IN ('kept', 'flagged')").format(valid, target))
+            conn.execute(
+                sql.SQL("CREATE VIEW {} AS SELECT * FROM {} WHERE _status IN ('kept', 'flagged')").format(valid, target)
+            )
             comment = (f"Silver build {build_id} of run {run_id}, rules {rules_hash(rules)}. One row per bronze ok row;"
                        " _status kept|flagged|rejected|duplicate. Lineage: bronze_id, _source_line, <col>_raw, _quality_flags.")  # fmt: skip
             conn.execute(sql.SQL("COMMENT ON TABLE {} IS {}").format(target, sql.Literal(comment)))
-            conn.execute(sql.SQL("COMMENT ON VIEW {} IS {}").format(valid, sql.Literal(f"Usable rows (kept + flagged) of {rules.target_table}.")))
+            conn.execute(
+                sql.SQL("COMMENT ON VIEW {} IS {}").format(
+                    valid, sql.Literal(f"Usable rows (kept + flagged) of {rules.target_table}.")
+                )
+            )
             conn.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO pipeline_ro").format(sql.Identifier(schema)))
             conn.execute(sql.SQL("GRANT SELECT ON {}, {} TO pipeline_ro").format(target, valid))
             duration = int((time.perf_counter() - started) * 1000)
@@ -173,5 +183,7 @@ def is_current(build: dict[str, Any] | None, rules: SilverRules | None) -> bool:
         exists = conn.execute("SELECT to_regclass(%s)", (f"{schema}.{table}",)).fetchone()[0]  # type: ignore[index]
         if not exists:
             return False
-        holder = conn.execute(sql.SQL("SELECT _build_id FROM {} LIMIT 1").format(sql.Identifier(schema, table))).fetchone()
+        holder = conn.execute(
+            sql.SQL("SELECT _build_id FROM {} LIMIT 1").format(sql.Identifier(schema, table))
+        ).fetchone()
     return bool(holder) and holder[0] == build["build_id"]

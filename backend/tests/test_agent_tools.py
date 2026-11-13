@@ -53,7 +53,9 @@ def test_errors_are_returned_and_calls_logged(conn, tagged_run) -> None:
     assert not bad["ok"] and "unknown column 'nope'" in bad["error"]
     assert not run_tool("check_regex", {"column": "owner", "pattern": "("}, tagged_run)["ok"]
     assert "invalid arguments" in run_tool("sample_rows", {"n": 99}, tagged_run)["error"]
-    rows = conn.execute("SELECT tool, ok, result_bytes FROM meta.tool_calls WHERE run_id = %s", (tagged_run,)).fetchall()
+    rows = conn.execute(
+        "SELECT tool, ok, result_bytes FROM meta.tool_calls WHERE run_id = %s", (tagged_run,)
+    ).fetchall()
     assert len(rows) == 3 and [r["ok"] for r in rows] == [False, False, False] and all(r["result_bytes"] for r in rows)
 
 

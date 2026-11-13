@@ -185,8 +185,7 @@ def _parse_all(values: list[str], contextual: bool) -> list[ParsedDate | None]:
     matched = [(v, _match_format(v, contextual)) for v in values]
     votes = Counter((f.label, _day_month_evidence(f, v)) for v, f in matched if f and f.day_first_strptime)
     return [
-        _parse(v, f, day_first=votes[(f.label, "dmy")] > votes[(f.label, "mdy")]) if f else None
-        for v, f in matched
+        _parse(v, f, day_first=votes[(f.label, "dmy")] > votes[(f.label, "mdy")]) if f else None for v, f in matched
     ]
 
 

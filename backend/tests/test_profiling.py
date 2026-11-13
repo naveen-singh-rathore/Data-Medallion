@@ -51,7 +51,10 @@ def test_casing_variants_grouped(messy) -> None:
 def test_mixed_date_formats_and_day_month_evidence(messy) -> None:
     dates = column(messy, "created_at")["dates"]
     assert [(f["format"], f["share"]) for f in dates["formats"]] == [
-        ("YYYY-MM-DD", round(19 / 22, 4)), ("DD/MM/YYYY", round(2 / 22, 4)), ("YYYY-MM-DDTHH:MM:SS", round(1 / 22, 4))]
+        ("YYYY-MM-DD", round(19 / 22, 4)),
+        ("DD/MM/YYYY", round(2 / 22, 4)),
+        ("YYYY-MM-DDTHH:MM:SS", round(1 / 22, 4)),
+    ]
     assert dates["formats"][1]["example"] in ("15/03/2024", "16/03/2024", "03/04/2024")
     assert (dates["ambiguous_count"], dates["dmy_evidence"], dates["mdy_evidence"]) == (1, 1, 0)
     assert dates["future_count"] == 1

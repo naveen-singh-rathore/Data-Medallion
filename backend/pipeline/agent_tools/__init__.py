@@ -46,6 +46,7 @@ def tool_schemas() -> list[dict[str, Any]]:
 
 def bound(result: Any, limit: int = MAX_RESULT_BYTES) -> Any:
     """Shrink the longest list in the result until its JSON fits `limit` bytes."""
+
     def size(x: Any) -> int:
         return len(json.dumps(x, ensure_ascii=False, default=str).encode())
 
@@ -72,7 +73,16 @@ def _log(call_id: uuid.UUID, run_id: str, name: str, args: dict[str, Any], size:
         conn.execute(
             "INSERT INTO meta.tool_calls (call_id, run_id, tool, args, result_bytes, latency_ms, ok, error)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (call_id, run_id, name, Jsonb(args), size, int((time.perf_counter() - started) * 1000), error is None, error),
+            (
+                call_id,
+                run_id,
+                name,
+                Jsonb(args),
+                size,
+                int((time.perf_counter() - started) * 1000),
+                error is None,
+                error,
+            ),
         )
 
 

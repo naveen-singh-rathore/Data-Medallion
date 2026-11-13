@@ -60,9 +60,17 @@ class ScriptedMessages:
             raise AssertionError(f"script exhausted after {len(self.turns)} turns")
         content = self.turns[len(self.calls) - 1]
         stop = "tool_use" if any(b["type"] == "tool_use" for b in content) else "end_turn"
-        return FakeResponse({"id": f"msg_{len(self.calls)}", "type": "message", "role": "assistant",
-                             "model": kwargs["model"], "content": content, "stop_reason": stop,
-                             "usage": {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 500}})
+        return FakeResponse(
+            {
+                "id": f"msg_{len(self.calls)}",
+                "type": "message",
+                "role": "assistant",
+                "model": kwargs["model"],
+                "content": content,
+                "stop_reason": stop,
+                "usage": {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 500},
+            }
+        )
 
 
 class ScriptedClient:

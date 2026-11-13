@@ -55,7 +55,9 @@ def test_swapped_columns_are_swapped_back_only_when_the_label_is_known(run, conn
     assert (t2["category"], t2["description"]) == ("hvac", "The AC unit on floor 2 is not working at all today")
     assert "swapped:category,description" in t2["_quality_flags"]["category"]
     assert "swapped:category,description" in t2["_quality_flags"]["description"]
-    assert t2["category_raw"].startswith("The AC unit") and t2["description_raw"] == "HVAC"  # lineage keeps the original
+    assert (
+        t2["category_raw"].startswith("The AC unit") and t2["description_raw"] == "HVAC"
+    )  # lineage keeps the original
     assert t2["_errors"] == []  # a fix, not an error
     t6 = got["T-6"]  # long text, but the description is no known label: left alone
     assert t6["category"].startswith("Another long sentence") and "swapped" not in str(t6["_quality_flags"])
@@ -92,10 +94,14 @@ def test_new_kinds_are_validated() -> None:
         RowCheck(kind="declared_duplicate", action="duplicate", why=WHY,
                  params={"source": "n", "pattern": "dup", "id": "id", "prefix": ""})  # fmt: skip
     with pytest.raises(ValidationError, match="min_empty_share"):
-        RowCheck(kind="junk_row", params={"id": "id", "id_pattern": "^x$", "min_empty_share": "2"}, action="reject", why=WHY)
+        RowCheck(
+            kind="junk_row", params={"id": "id", "id_pattern": "^x$", "min_empty_share": "2"}, action="reject", why=WHY
+        )
 
 
 def test_swap_needs_a_mapping_on_the_label_column(run) -> None:
-    rules = rules_for(run, [RowCheck(kind="swapped_columns", params={"a": "description", "b": "category"}, action="swap", why=WHY)])
+    rules = rules_for(
+        run, [RowCheck(kind="swapped_columns", params={"a": "description", "b": "category"}, action="swap", why=WHY)]
+    )
     report = validate_rules(rules, run)
     assert not report.ok and "needs a standard-value mapping" in " ".join(report.errors)

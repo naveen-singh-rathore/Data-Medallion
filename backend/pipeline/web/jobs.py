@@ -167,8 +167,15 @@ def auto_map(run_id: uuid.UUID) -> dict[str, Any]:
     def work(job: Job) -> None:
         _step(job, "automap", "The AI is deciding the values left outside the standard lists")
         result = rules_edit.auto_map(run_id)
-        job.log("automap", f"AI decided {result['decided']} value(s)"
-                + (f"; private columns not sent: {', '.join(result['skipped_private'])}" if result["skipped_private"] else ""))
+        job.log(
+            "automap",
+            f"AI decided {result['decided']} value(s)"
+            + (
+                f"; private columns not sent: {', '.join(result['skipped_private'])}"
+                if result["skipped_private"]
+                else ""
+            ),
+        )
         warm_preview(run_id)
 
     return _start(run_id, "automap", work)
@@ -180,8 +187,11 @@ def _build(job: Job, run_id: uuid.UUID) -> None:
 
     _step(job, "build", "Applying the approved rules to every row and storing the cleaned table")
     b = build.build_silver(run_id, views.APPROVED_PATH)
-    job.log("build", f"Cleaned table {b['target_table']} built: {b['rows_kept']:,} clean, {b['rows_flagged']:,} with a "
-            f"warning, {b['rows_rejected']:,} rejected, {b['rows_duplicate']:,} duplicates; every row accounted for")
+    job.log(
+        "build",
+        f"Cleaned table {b['target_table']} built: {b['rows_kept']:,} clean, {b['rows_flagged']:,} with a "
+        f"warning, {b['rows_rejected']:,} rejected, {b['rows_duplicate']:,} duplicates; every row accounted for",
+    )
 
 
 def _gold(job: Job, run_id: uuid.UUID) -> None:
@@ -191,7 +201,9 @@ def _gold(job: Job, run_id: uuid.UUID) -> None:
     _step(job, "gold", "Building the business tables and data-quality findings")
     g = build_gold(run_id, approved_path=views.APPROVED_PATH)
     ok = sum(c["ok"] for c in g["checks"].values())
-    job.log("gold", f"Business tables built in {g['duration_ms']} ms; {ok}/{len(g['checks'])} reconciliation checks passed")
+    job.log(
+        "gold", f"Business tables built in {g['duration_ms']} ms; {ok}/{len(g['checks'])} reconciliation checks passed"
+    )
 
 
 def start_gold(run_id: uuid.UUID) -> dict[str, Any]:
@@ -211,7 +223,9 @@ def decide_rules(run_id: uuid.UUID, approve: bool, reason: str | None) -> dict[s
     from pipeline.dq_agent import runner
 
     def work(job: Job) -> None:
-        _step(job, "resume", "Re-validating the rules and saving your decision" if approve else "Recording the rejection")
+        _step(
+            job, "resume", "Re-validating the rules and saving your decision" if approve else "Recording the rejection"
+        )
         payload = {"action": "approve"} if approve else {"action": "reject", "reason": reason or ""}
         result = runner.resume(str(run_id), payload)
         errors = (result.get("paused") or {}).get("errors") or []

@@ -27,7 +27,9 @@ def silver_run(ingest) -> str:
 def run_rules(conn, raw: dict, run_id: str) -> dict[str, dict]:
     compiled = compile_rules(SilverRules.model_validate(raw), run_id)
     rows = conn.cursor(row_factory=dict_row).execute(compiled.query, compiled.params).fetchall()
-    ids = conn.execute("SELECT bronze_id, payload ->> 'id' AS id FROM bronze.records WHERE run_id = %s", (run_id,)).fetchall()
+    ids = conn.execute(
+        "SELECT bronze_id, payload ->> 'id' AS id FROM bronze.records WHERE run_id = %s", (run_id,)
+    ).fetchall()
     by_bronze = {r["bronze_id"]: r["id"] for r in ids}
     return {by_bronze[r["bronze_id"]]: r for r in rows}
 

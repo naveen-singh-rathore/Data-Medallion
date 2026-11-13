@@ -45,11 +45,13 @@ def test_column_rule_is_described_in_order() -> None:
 
 def test_error_and_flag_labels() -> None:
     assert explain.error_label("created_at:unparseable", {"created_at": "timestamp"}) == (
-        "created_at could not be read as date and time")
+        "created_at could not be read as date and time"
+    )
     assert explain.error_label("row:date_order:opened,closed") == "opened is later than closed"
     assert explain.flag_label("sentinel:999") == "Fake placeholder value removed (now empty): '999'"
     assert explain.describe_tool_call("get_value_counts", {"column": "x", "normalized": True}) == (
-        "Counted the values of x grouped by spelling")
+        "Counted the values of x grouped by spelling"
+    )
 
 
 # --- API end to end --------------------------------------------------------------------
@@ -142,7 +144,9 @@ def test_upload_lands_profiles_and_explains_every_checkpoint(client) -> None:
     assert c.get(f"/api/runs/{run_id}/silver").status_code == 404
 
     # a person describes the data: stored as human, approved, card re-rendered
-    res = c.post(f"/api/runs/{run_id}/context", json={"text": "Domain: test tickets\nTags: owner=person\n\nOne row per ticket."})
+    res = c.post(
+        f"/api/runs/{run_id}/context", json={"text": "Domain: test tickets\nTags: owner=person\n\nOne row per ticket."}
+    )
     assert res.status_code == 200
     ov = _wait(c, run_id)
     assert {s["key"]: s["state"] for s in ov["stages"]}["context"] == "done"
@@ -369,14 +373,19 @@ def test_leftover_values_are_chosen_in_the_ui_and_a_finished_review_reopens(prop
     rule = next(x for x in c.get(url).json()["columns"] if x["name"] == "state")
     assert "In-Progress" in rule["null_tokens"] and state_column()["leftovers"] == []
 
-    bad = c.post(f"{url}/values", json={"column": "state", "choices": [{"value": "x", "action": "merge", "target": "nope"}]})
+    bad = c.post(
+        f"{url}/values", json={"column": "state", "choices": [{"value": "x", "action": "merge", "target": "nope"}]}
+    )
     assert bad.status_code == 422
 
     # finish, then reopen: the approval is withdrawn, the rules are editable again, nothing calls the AI
     assert runner.resume(run_id, {"action": "approve"}, mode="live")["status"] == "approved"
     approved_file = path.parent.parent / "silver_rules.yaml"
     assert approved_file.exists() and c.get(url).json()["state"] == "approved"
-    assert c.post(f"{url}/values", json={"column": "state", "choices": [{"value": "open", "action": "new"}]}).status_code == 409
+    assert (
+        c.post(f"{url}/values", json={"column": "state", "choices": [{"value": "open", "action": "new"}]}).status_code
+        == 409
+    )
     assert c.post(f"{url}/reopen").json()["ok"] is True
     assert approved_file.exists() and "Done" not in approved_file.read_text()  # still approved until finished
     r = c.get(url).json()
@@ -405,7 +414,9 @@ def test_ai_decides_leftover_values_and_the_reviewer_only_changes_what_is_wrong(
                             "why": "Ticket state drives the open/closed counts.", "mapping": {"open": ["Open"]}})  # fmt: skip
     assert c.put(f"{url}/yaml", json={"text": _yaml.safe_dump(data, sort_keys=False)}).json()["ok"] is True
 
-    found = mapping_assist.leftovers(mapping_assist.SilverRules.model_validate(_yaml.safe_load(path.read_text())), run_id)
+    found = mapping_assist.leftovers(
+        mapping_assist.SilverRules.model_validate(_yaml.safe_load(path.read_text())), run_id
+    )
     assert {x["value"]: x["count"] for x in found["state"]} == {"Closed": 4, "In-Progress": 2}
 
     sent = {}
@@ -433,19 +444,38 @@ def test_ai_decides_leftover_values_and_the_reviewer_only_changes_what_is_wrong(
         ("Closed", {"action": "new", "target": "closed"}, False),
         ("In-Progress", {"action": "merge", "target": "open"}, False),
     ]
-    assert next(x for x in c.get(f"/api/runs/{run_id}/silver").json()["columns"] if x["name"] == "state")["leftovers"] == []
+    assert (
+        next(x for x in c.get(f"/api/runs/{run_id}/silver").json()["columns"] if x["name"] == "state")["leftovers"]
+        == []
+    )
     assert rules_edit.editable(_uuid.UUID(run_id))  # still paused at approval
 
     # the reviewer disagrees with two decisions
-    res = c.post(f"{url}/values", json={"column": "state", "choices": [
-        {"value": "Closed", "action": "empty", "spellings": ["Closed"]},
-        {"value": "In-Progress", "action": "remove", "target": "open", "spellings": ["In-Progress", "in progress"]}]})
+    res = c.post(
+        f"{url}/values",
+        json={
+            "column": "state",
+            "choices": [
+                {"value": "Closed", "action": "empty", "spellings": ["Closed"]},
+                {
+                    "value": "In-Progress",
+                    "action": "remove",
+                    "target": "open",
+                    "spellings": ["In-Progress", "in progress"],
+                },
+            ],
+        },
+    )
     assert res.status_code == 200, res.text
     state_rule = next(x for x in c.get(url).json()["columns"] if x["name"] == "state")
     assert state_rule["mapping"] == {"open": ["Open"]} and "Closed" in state_rule["null_tokens"]
     assert [(d["value"], d["now"]["action"], d["changed"]) for d in state_rule["ai_mapped"]] == [
-        ("Closed", "empty", True), ("In-Progress", "keep", True)]
-    res = c.post(f"{url}/values", json={"column": "state", "choices": [{"value": "Closed", "action": "merge", "target": "open"}]})
+        ("Closed", "empty", True),
+        ("In-Progress", "keep", True),
+    ]
+    res = c.post(
+        f"{url}/values", json={"column": "state", "choices": [{"value": "Closed", "action": "merge", "target": "open"}]}
+    )
     assert res.status_code == 200 and "Closed" not in next(x for x in c.get(url).json()["columns"]
                                                           if x["name"] == "state")["null_tokens"]  # fmt: skip
 
