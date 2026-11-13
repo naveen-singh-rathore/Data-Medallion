@@ -57,6 +57,34 @@ target table, `silver.records_clean`:
 
 raw_tickets (approved rules, 12 s): 10,280 rows in -> 7,849 kept, 2,409 flagged, 22 rejected, 0 duplicates.
 
+## Semantic classification (category)
+
+`python -m pipeline.cli classify-category [--mode live] [--check N]` labels the rows whose category the
+approved rules could not standardise (empty, a value outside the standard list, or a sentence that
+leaked into the column) from their text: the category field plus the `free_text` columns, with emails,
+phones and person names replaced (`[PERSON]`). The answer is one of the approved standard values or
+`other` (closed list via JSON schema) with a confidence; below 0.6 nothing is recovered and the row is
+flagged `ai_low_confidence`. Results go to `silver.ai_labels` and appear in silver as `category_ai`,
+`category_ai_confidence` and `category_source` (`rule` | `ai` | `none`); `category` itself is never
+changed, and every silver rebuild re-applies them. Identical texts are classified once and cached by
+text hash + prompt version + model + label list (`meta.classification_cache`); 50 per call, CHEAP_MODEL.
+
+| raw_tickets (claude-haiku-5-5, `category_classify_v1`) | |
+| --- | --- |
+| Target rows / distinct masked texts | 2,008 / 1,884 |
+| Calls, cost, time | 38 calls (avg 5.6 s), **$0.041**, 240 s |
+| Recovered (confidence >= 0.6) / low confidence | **1,925** (95.9%) / 83 |
+| Recovered by label | other 977, hvac 479, electrical 277, elevator 162, fire_safety 10, plumbing 8, janitorial 7, pest_control 3, general_maintenance 1, security 1 |
+| Rerun | 1,884 / 1,884 cache hits, 0 calls, $0, 1.3 s |
+| Consistency check (200 rule-mapped rows, report only) | 95.5% agree; disagreements: rule `other` vs AI `general_maintenance` (9) |
+
+977 of the recovered `other` are IT / network tickets (Network, IT, WiFi, Connectivity, IT Support): the
+approved standard list has no IT category, so the closed list can only say `other`.
+
+**Eval** (40 hand-labelled tickets): fill `human_label` in `data/eval/category_eval_85113639.csv`
+(the AI's answers are not in the sheet), then `python -m pipeline.cli category-eval data/eval/category_eval_85113639.csv`
+for accuracy, coverage, cost and latency. _Pending labels._
+
 ## Gold
 
 _TODO_

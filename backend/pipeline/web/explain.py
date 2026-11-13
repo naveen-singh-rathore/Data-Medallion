@@ -128,6 +128,8 @@ FLAGS = {
     "unparseable": "Could not be read as the expected type (now empty)",
     "out_of_range": "Outside the allowed range (now empty)",
     "nulled_by_row_check": "Emptied by a row check",
+    "ai_labelled": "Label recovered by AI from the ticket text (see the _ai column)",
+    "ai_low_confidence": "AI was unsure; no label recovered",
 }
 
 

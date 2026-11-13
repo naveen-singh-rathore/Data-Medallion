@@ -13,6 +13,7 @@ Known vocabulary is never masked: null-like tokens, punctuation-only placeholder
 sentinels, date-format labels, type names and the profiler's own markers ("<empty>").
 """
 
+import re
 from typing import Any
 
 from pipeline.profile_columns import TYPES, mask
@@ -102,3 +103,25 @@ def issue_policy(issue: dict[str, Any], policies: dict[str, str]) -> str:
 
 def redact_issue(issue: dict[str, Any], policies: dict[str, str]) -> dict[str, Any]:
     return issue | {"evidence": redact(issue["evidence"], issue_policy(issue, policies), policies)}
+
+
+# --- free text sent on purpose (semantic classification) ---------------------------------------
+
+_TEXT_EMAIL = re.compile(r"[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}")
+_TEXT_PHONE = re.compile(r"(\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}")
+_NAME_LIKE = re.compile(r"^(?:[A-Z][a-z'-]+|[A-Z]\.)(?:\s+(?:[A-Z][a-z'-]+|[A-Z]\.))+$")
+
+
+def name_like(value: str) -> bool:
+    """'Jane Doe', 'D. Kim', 'Mary-Ann O'Neil': two or more capitalised words. Not 'System',
+    'maintenance team' or 'CityWide Electric' (camel case) - generic words keep their meaning."""
+    return bool(_NAME_LIKE.fullmatch(value.strip())) and not any(w.isupper() and len(w) > 2 for w in value.split())
+
+
+def scrub_text(text: str, names: list[str]) -> str:
+    """Free text with emails, phone numbers and the given person names replaced by placeholders."""
+    out = _TEXT_EMAIL.sub("[EMAIL]", text)
+    out = _TEXT_PHONE.sub("[PHONE]", out)
+    for name in sorted(names, key=len, reverse=True):
+        out = re.sub(rf"\b{re.escape(name)}\b", "[PERSON]", out, flags=re.IGNORECASE)
+    return out

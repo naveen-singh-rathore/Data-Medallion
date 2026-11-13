@@ -109,6 +109,11 @@ def build_silver(run_id: uuid.UUID | str, approved_path: Path | None = None) -> 
                 " %(build_id)s::uuid AS _build_id, %(run_id)s::uuid AS _run_id"
                 " FROM ({}) AS c JOIN bronze.records b ON b.bronze_id = c.bronze_id").format(staging, compiled.query),
                 compiled.params | {"build_id": build_id})  # fmt: skip
+            from pipeline.silver.classify import (
+                apply_ai_labels,  # AI labels survive every rebuild
+            )
+
+            apply_ai_labels(conn, staging, run_id, rules)
             counts = dict(conn.execute(sql.SQL("SELECT _status, count(*) FROM {} GROUP BY _status").format(staging)).fetchall())
             rows_in = conn.execute("SELECT count(*) FROM bronze.records WHERE run_id = %s AND parse_status = 'ok'",
                                    (run_id,)).fetchone()[0]  # type: ignore[index]  # fmt: skip
