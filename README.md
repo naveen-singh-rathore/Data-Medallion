@@ -41,7 +41,21 @@ without needing to know its columns. `python -m pipeline.cli runs` lists past ru
 
 ## Silver
 
-_TODO_
+`python -m pipeline.cli build-silver` (or automatically after **Finish review** in the UI) applies the
+**approved** rules (`rules/silver_rules.yaml`) to the run and stores the result in the rules'
+target table, `silver.records_clean`:
+
+- **Nothing is dropped:** one silver row per bronze ok row, with `_status` = `kept` | `flagged`
+  (kept, with warnings in `_errors`) | `rejected` | `duplicate`. `silver.records_clean_valid` is the
+  usable rows (kept + flagged); Gold reads that.
+- **Lineage per value:** `bronze_id`, `_source_line`, `row_hash`, `<col>_raw` for every column whose
+  type or value a rule can change, `_quality_flags` (which fix touched which column), `_build_id`.
+- **Reconciled and atomic:** kept + flagged + rejected + duplicate must equal the bronze ok rows or the
+  build fails; the table is built under a staging name and swapped in one transaction, so a failed
+  build leaves the previous table intact. Each build (rules YAML, hash, SQL digest, funnel, per-column
+  stats) is in `meta.silver_builds`.
+
+raw_tickets (approved rules, 12 s): 10,280 rows in -> 7,849 kept, 2,409 flagged, 22 rejected, 0 duplicates.
 
 ## Gold
 

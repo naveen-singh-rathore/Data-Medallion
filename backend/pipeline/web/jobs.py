@@ -164,6 +164,24 @@ def auto_map(run_id: uuid.UUID) -> dict[str, Any]:
     return _start(run_id, "automap", work)
 
 
+def _build(job: Job, run_id: uuid.UUID) -> None:
+    from pipeline.silver import build
+    from pipeline.web import views
+
+    _step(job, "build", "Applying the approved rules to every row and storing the cleaned table")
+    b = build.build_silver(run_id, views.APPROVED_PATH)
+    job.log("build", f"Cleaned table {b['target_table']} built: {b['rows_kept']:,} clean, {b['rows_flagged']:,} with a "
+            f"warning, {b['rows_rejected']:,} rejected, {b['rows_duplicate']:,} duplicates; every row accounted for")
+
+
+def start_build(run_id: uuid.UUID) -> dict[str, Any]:
+    def work(job: Job) -> None:
+        _build(job, run_id)
+        warm_preview(run_id)
+
+    return _start(run_id, "build", work)
+
+
 def decide_rules(run_id: uuid.UUID, approve: bool, reason: str | None) -> dict[str, Any]:
     from pipeline.dq_agent import runner
 
@@ -175,6 +193,8 @@ def decide_rules(run_id: uuid.UUID, approve: bool, reason: str | None) -> dict[s
         if approve and errors:
             raise RuntimeError("the edited rules did not pass validation: " + "; ".join(errors)[:400])
         job.log("resume", f"Decision saved: {result['status']}")
+        if approve and result["status"] == "approved":
+            _build(job, run_id)
         warm_preview(run_id)
 
     return _start(run_id, "resume", work)

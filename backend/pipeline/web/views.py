@@ -25,6 +25,7 @@ from pipeline.context import get_context
 from pipeline.db import get_ro_conn, transaction
 from pipeline.profile_values import normalization_key
 from pipeline.profiling import load_profile
+from pipeline.silver.build import is_current, latest_build
 from pipeline.silver.compiler import _check_label, compile_rules
 from pipeline.silver.mapping_assist import spellings_of
 from pipeline.silver.rules_schema import (
@@ -219,10 +220,18 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
         approval = ("running", "the AI is deciding leftover values")
     stages.append(_stage("approval", "Your approval", *approval))
 
-    if rules is None:
+    build = latest_build(run_id)
+    if running_step == "build":
+        silver = ("running", "building the cleaned table")
+    elif rules is None:
         silver = ("waiting", "available once rules are proposed")
+    elif rules_state == "approved" and is_current(build, rules):
+        usable = (build["rows_kept"] or 0) + (build["rows_flagged"] or 0)
+        silver = ("done", f"{usable:,} usable rows stored in {build['target_table']}")
+    elif rules_state == "approved" and build and build["status"] == "failed":
+        silver = ("error", "build failed: " + (build["error_message"] or "")[:120])
     elif rules_state == "approved":
-        silver = ("done", "approved rules; showing the cleaned result")
+        silver = ("action", "rules approved; the cleaned table is not built yet")
     else:
         silver = ("preview", "preview of the proposed rules")
     stages.append(_stage("silver", "Cleaned data (Silver)", *silver))
@@ -233,6 +242,9 @@ def overview(run_id: uuid.UUID, job: dict[str, Any] | None) -> dict[str, Any] | 
         "stages": stages, "job": job, "llm_mode": settings.llm_mode, "agent": agent and {
             k: agent.get(k) for k in ("status", "paused", "turns", "tool_calls", "interrupted")},
         "rules_state": rules_state,
+        "build": build and {k: build[k] for k in ("build_id", "status", "target_table", "rules_hash", "started_at",
+                                                  "duration_ms", "rows_in", "rows_kept", "rows_flagged",
+                                                  "rows_rejected", "rows_duplicate", "error_message")},
     })  # fmt: skip
 
 
@@ -487,6 +499,7 @@ class Preview:
     state: str
     rules_hash: str
     rows: list[dict[str, Any]]  # compiled output + __payload, __line
+    build: dict[str, Any] | None = None  # the stored build the rows were read from, if any
 
 
 _cache: "OrderedDict[tuple[str, str], Preview]" = OrderedDict()
@@ -499,7 +512,9 @@ def silver_preview(run_id: uuid.UUID) -> Preview | None:
     rules, state, _ = current_rules(run_id)
     if rules is None or state is None:
         return None
-    key = (str(run_id), rules_hash(rules))
+    build = latest_build(run_id) if state == "approved" else None
+    stored = build if is_current(build, rules) else None
+    key = (str(run_id), rules_hash(rules), str(stored["build_id"]) if stored else "")
     with _cache_lock:
         if key in _cache:
             _cache.move_to_end(key)
@@ -509,12 +524,20 @@ def silver_preview(run_id: uuid.UUID) -> Preview | None:
         with _cache_lock:
             if key in _cache:
                 return _cache[key]
-        compiled = compile_rules(rules, str(run_id))
-        query = sql.SQL("SELECT c.*, b.payload AS __payload, b.source_line AS __line FROM ({}) AS c"
-                        " JOIN bronze.records b ON b.bronze_id = c.bronze_id ORDER BY b.source_line").format(compiled.query)  # fmt: skip
+        if stored:  # read the built table: what Gold will read, and fast
+            schema, _, table = stored["target_table"].partition(".")
+            query = sql.SQL("SELECT c.*, b.payload AS __payload, b.source_line AS __line FROM {} AS c"
+                            " JOIN bronze.records b ON b.bronze_id = c.bronze_id ORDER BY b.source_line").format(
+                sql.Identifier(schema, table))  # fmt: skip
+            params: dict[str, Any] = {}
+        else:
+            compiled = compile_rules(rules, str(run_id))
+            query = sql.SQL("SELECT c.*, b.payload AS __payload, b.source_line AS __line FROM ({}) AS c"
+                            " JOIN bronze.records b ON b.bronze_id = c.bronze_id ORDER BY b.source_line").format(compiled.query)  # fmt: skip
+            params = compiled.params
         with get_ro_conn(PREVIEW_TIMEOUT) as conn:
-            rows = conn.cursor(row_factory=dict_row).execute(query, compiled.params).fetchall()
-        preview = Preview(rules, state, key[1], rows)
+            rows = conn.cursor(row_factory=dict_row).execute(query, params).fetchall()
+        preview = Preview(rules, state, key[1], rows, stored)
         with _cache_lock:
             _cache[key] = preview
             while len(_cache) > PREVIEW_CACHE_SIZE:
@@ -524,7 +547,7 @@ def silver_preview(run_id: uuid.UUID) -> Preview | None:
 
 def is_cached(run_id: uuid.UUID) -> bool:
     rules, _, _ = current_rules(run_id)
-    return rules is not None and (str(run_id), rules_hash(rules)) in _cache
+    return rules is not None and any(k[:2] == (str(run_id), rules_hash(rules)) for k in _cache)
 
 
 def _shown(value: Any) -> str | None:
@@ -591,6 +614,7 @@ def silver_summary(run_id: uuid.UUID) -> dict[str, Any] | None:
         })  # fmt: skip
     return jsonable({
         "state": preview.state, "rules_hash": preview.rules_hash, "rows_in": len(rows), "status": dict(status),
+        "build": preview.build and {k: preview.build[k] for k in ("build_id", "started_at", "duration_ms", "target_table")},
         "rows_out": status["kept"] + status["flagged"],
         "errors": [{"error": k, "label": explain.error_label(k, types), "count": v} for k, v in errors.most_common()],
         "columns": columns,

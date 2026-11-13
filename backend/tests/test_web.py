@@ -212,6 +212,13 @@ def proposed(ingest, conn, tmp_path, monkeypatch):
     monkeypatch.setattr(views, "APPROVED_PATH", rules_dir / "silver_rules.yaml")
     for module in (views, rules_edit, review):
         monkeypatch.setattr(module, "proposed_path", lambda run_id: rules_dir / run_id / "proposed.yaml")
+    # never build into the real silver.records_clean from a test: record the call instead
+    from pipeline.silver import build as silver_build
+
+    builds: list[str] = []
+    monkeypatch.setattr(silver_build, "build_silver",
+                        lambda run, path=None: builds.append(str(run)) or {"target_table": "x", "rows_kept": 0,
+                        "rows_flagged": 0, "rows_rejected": 0, "rows_duplicate": 0})  # fmt: skip
     run_id = str(ingest(FIXTURE))
     profile_run(run_id)
     real_ensure_context(run_id, "Domain: test tickets\nTags: owner=person\n\nOne row per ticket.")
@@ -304,7 +311,8 @@ def test_each_rule_is_approved_or_rejected_on_its_own(proposed) -> None:
     assert c.post(f"{url}/review", json={"key": "column:amount", "decision": "approve"}).status_code == 200
 
     assert c.post(f"{url}/finish").status_code == 200
-    _wait(c, run_id)
+    ov = _wait(c, run_id)
+    assert [e["step"] for e in ov["job"]["events"]][-2:] == ["build", "build"]  # finishing builds the cleaned table
     r = c.get(url).json()
     assert r["state"] == "approved" and r["review"]["approved"] == len(keys)  # the decisions stay as a record
     assert c.post(f"{url}/review", json={"key": "column:amount", "decision": "undo"}).status_code in (409, 422)

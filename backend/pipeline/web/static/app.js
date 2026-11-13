@@ -74,7 +74,7 @@ const STEP_COPY = {
     "It can only propose. Every proposal is checked automatically: rules must be valid, are dry-run on 2,000 sample rows, and must cover every high and medium issue."],
   approval: ["Nothing changes in your data until a person has reviewed every rule. Each rule shows what it does, why, which issues it fixes, its effect on your rows, and every setting it has.",
     "Approve or reject each rule on its own. When all are decided, finish the review to use them for the cleaned data."],
-  silver: ["Silver is your data after the rules are applied: one date format, placeholders emptied, spellings merged, numbers made numeric.",
+  silver: ["Silver is your data after the approved rules are applied and stored as a table: one date format, placeholders emptied, spellings merged, numbers made numeric. It is built automatically when you finish the review.",
     "Every value keeps a link to its original, and every fix is labelled, so you can filter on what was changed instead of trusting it blindly."],
   gold: ["Gold will hold business-ready tables and metrics built from Silver.", "This layer is not built yet in this pipeline."],
 };
@@ -803,9 +803,11 @@ PANELS.silver = async (ov) => {
   const n = s.rows_in || 1;
   const st = s.status;
   return h`
-    <div class="callout ${s.state === "approved" ? "ok" : "info"} small">${s.state === "approved"
-      ? h`<b>Approved rules.</b> `
-      : h`<b>Preview.</b> These are the <i>proposed</i> rules, not yet approved. `}Computed live over all ${num(s.rows_in)} rows, read-only. The Silver table <span class="mono">${s.target_table}</span> itself is not written yet (the build step is still to come).</div>
+    ${s.build ? h`<div class="callout ok small row between"><span><b>✓ Stored in <span class="mono">${s.build.target_table}</span></b>, built ${when(s.build.started_at)} in ${dur(s.build.duration_ms)} from the approved rules. Every one of the ${num(s.rows_in)} raw rows is accounted for. Usable rows (clean + with a warning) are in <span class="mono">${s.build.target_table}_valid</span>; this page reads the stored table.</span>
+        <button class="btn small" data-act="buildsilver">Rebuild</button></div>`
+    : s.state === "approved" ? h`<div class="callout warn small row between"><span><b>Rules approved, but the cleaned table is not built yet.</b> What you see is computed live from the approved rules.</span>
+        <button class="btn primary small" data-act="buildsilver">Build the cleaned table</button></div>`
+    : h`<div class="callout info small"><b>Preview.</b> These are the <i>proposed</i> rules, not yet approved. Computed live over all ${num(s.rows_in)} rows, read-only. The cleaned table <span class="mono">${s.target_table}</span> is built when you finish the review.</div>`}
     <div class="grid">
       ${kpi(num(s.rows_in), "rows in")}${kpi(num(st.kept || 0), "clean rows", "ok")}${kpi(num(st.flagged || 0), "kept, with a warning", st.flagged ? "warn" : "")}
       ${kpi(num(st.rejected || 0), "rejected", st.rejected ? "bad" : "")}${kpi(num(st.duplicate || 0), "duplicates removed")}
@@ -1077,6 +1079,7 @@ const ACTIONS = {
   },
   applyvalues: (el) => applyValues(Number(el.dataset.i)),
   aimapapply: (el) => applyAiMapChanges(Number(el.dataset.i)),
+  buildsilver: () => act(() => api(`/runs/${state.runId}/silver/build`, { method: "POST" }), "Building the cleaned table…"),
   automap: () => act(() => api(`/runs/${state.runId}/rules/automap`, { method: "POST" }), "The AI is deciding the leftover values…"),
   rmvalue: async (el) => {
     if (!confirm(`Stop merging “${el.dataset.value}” into “${el.dataset.target}”? It will stay as a separate value (you can choose again below).`)) return;

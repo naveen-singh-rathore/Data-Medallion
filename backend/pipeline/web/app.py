@@ -314,6 +314,18 @@ def rules_finish(run_id: uuid.UUID) -> dict[str, Any]:
     return _busy(lambda: jobs.decide_rules(run_id, True, None))
 
 
+@app.post("/api/runs/{run_id}/silver/build")
+def silver_build(run_id: uuid.UUID) -> dict[str, Any]:
+    """Apply the approved rules and store the cleaned table (runs in the background)."""
+    from pipeline.silver.build import BuildError, approved_rules
+
+    try:
+        approved_rules(str(run_id), views.APPROVED_PATH)
+    except BuildError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _busy(lambda: jobs.start_build(run_id))
+
+
 @app.get("/api/runs/{run_id}/silver")
 def silver(run_id: uuid.UUID) -> dict[str, Any]:
     return _found(views.silver_summary(run_id), "no rules to preview yet")
